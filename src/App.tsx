@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  Archive, ArrowDownToLine, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy,
+  Archive, ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy,
   Download, FileImage, FolderPlus, Grid2X2, Heart, History, ImagePlus, Info, Keyboard, Layers3, Menu,
-  MessageCircle, MoreHorizontal, Pencil, Plus, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
+  MessageCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
 } from 'lucide-react';
 import type { Collection, Meme, OnlineMeme, View } from './types';
 import MemeCard, { useBlobUrl } from './components/MemeCard';
@@ -15,6 +15,7 @@ import { isAndroid, isDesktop, platformName, saveBlob, useImage } from './lib/pl
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
+const CURRENT_VERSION = '0.4.0';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 function App() {
@@ -76,6 +77,8 @@ function App() {
 
   function openImport(files: File[] = []) { setPendingImportFiles(files); setImportOpen(true); }
   function closeImport() { setImportOpen(false); setPendingImportFiles([]); }
+  const canReturnToLibrary = primaryTab === 'library' && (view !== 'all' || Boolean(tagFilter) || Boolean(search) || selecting);
+  function returnToLibrary() { setView('all'); setTagFilter(''); setSearch(''); setSelecting(false); setSelected(new Set()); setMobileNav(false); }
 
   async function copyMeme(meme: Meme, share = false) { try { const result = await useImage(meme, share); if (!result.includes('取消')) await markUsed(meme.id); notify(result); } catch (error) { notify(error instanceof Error ? error.message : '操作失败'); } }
   async function deleteSelected() { const ids = selecting && selected.size ? [...selected] : selectedId ? [selectedId] : []; if (!ids.length) return; await deleteMemes(ids); setSelected(new Set()); setSelecting(false); setSelectedId(undefined); notify(`已移除 ${ids.length} 张表情`); }
@@ -98,7 +101,7 @@ function App() {
   return <div className={`app-shell primary-${primaryTab} ${settings.reduceMotion ? 'reduce-motion' : ''}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
     <header className="topbar glass">
-      {primaryTab === 'library' && <button className="mobile-menu icon-button" aria-label="打开导航" onClick={() => setMobileNav(true)}><Menu size={20} /></button>}
+      {primaryTab === 'library' && (canReturnToLibrary ? <button className="topbar-back icon-button" aria-label="返回全部表情" onClick={returnToLibrary}><ArrowLeft size={20} /></button> : <button className="mobile-menu icon-button" aria-label="打开导航" onClick={() => setMobileNav(true)}><Menu size={20} /></button>)}
       <button className="brand" onClick={() => { setPrimaryTab('library'); setView('all'); setSearch(''); }}><span className="brand-icon">心</span><span><strong>心语表情库</strong><small>MEME LIBRARY</small></span></button>
       <div className="topbar-status"><span className="status-dot" />{platformName}<span className="status-separator" />{memes.length} 张私藏</div>
       <div className="topbar-actions"><button className="glass-button subtle" onClick={() => setBackupOpen(true)}><ArrowUpFromLine size={16} /> <span>导入 / 同步</span></button><button className="primary-button" onClick={() => openImport()}><Plus size={18} /><span>添加图片</span></button><button className="icon-button window-action" aria-label="更多" onClick={() => { setPrimaryTab('library'); setView('settings'); }}><MoreHorizontal size={19} /></button></div>
@@ -192,7 +195,7 @@ function TagShortcuts({ tags, activeTag, onSelect }: { tags: [string, number][];
   return <div className="tag-shortcuts" aria-label="按标签筛选"><span><Tag size={14} />标签</span>{tags.slice(0, 12).map(([tag, count]) => <button key={tag} type="button" className={activeTag === tag ? 'active' : ''} onClick={() => onSelect(tag)}>#{tag}<em>{count}</em></button>)}</div>;
 }
 
-function SettingsView({ settings, onNotify }: { settings: { reduceMotion: boolean; dense: boolean; onlineSupplement: boolean }; onNotify: (message: string) => void }) { const set = async (key: keyof typeof settings, value: boolean) => { await db.settings.put({ id: 'preferences', ...settings, [key]: value }); onNotify('偏好设置已更新'); }; return <div className="settings-view"><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Zap size={18} /></div><div><h2>使用偏好</h2><p>让心语更贴近你的节奏。</p></div></div><SettingToggle title="紧凑网格" description="每屏显示更多表情，适合大收藏库。" value={settings.dense} onChange={(value) => set('dense', value)} /><SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} /><SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} /></div><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Info size={18} /></div><div><h2>关于心语表情库</h2><p>跨 Windows 与 Android 的私人表情库。</p></div></div><div className="about-row"><span>当前平台</span><strong>{platformName}</strong></div><div className="about-row"><span>数据位置</span><strong>本机 IndexedDB</strong></div><div className="about-row"><span>版本</span><strong>0.1.0 · 离线优先</strong></div><p className="about-note">参考 OhMyMeme 的快捷调用与复制路径，参考 Rays 的标签、正则搜索和分享思路。原图和元数据不上传云端，在线图库仅在你主动打开时请求。</p></div></div>; }
+function SettingsView({ settings, onNotify }: { settings: { reduceMotion: boolean; dense: boolean; onlineSupplement: boolean }; onNotify: (message: string) => void }) { const set = async (key: keyof typeof settings, value: boolean) => { await db.settings.put({ id: 'preferences', ...settings, [key]: value }); onNotify('偏好设置已更新'); }; return <div className="settings-view"><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Zap size={18} /></div><div><h2>使用偏好</h2><p>让心语更贴近你的节奏。</p></div></div><SettingToggle title="紧凑网格" description="每屏显示更多表情，适合大收藏库。" value={settings.dense} onChange={(value) => set('dense', value)} /><SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} /><SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} /></div><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看本次功能变化。</p></div></div><div className="update-row"><span><strong>当前版本</strong><small>v{CURRENT_VERSION}</small></span><button className="glass-button" onClick={() => onNotify(`已是最新版本 v${CURRENT_VERSION}`)}><RefreshCw size={15} /> 检查更新</button></div><details className="changelog"><summary><span>更新日志</span><ChevronRight size={16} /></summary><div><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>导入时可选名称、分组和回车添加标签。</li><li>主页标签可点选筛选，删除调整为管理一级操作。</li></ul></div></details></div><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Info size={18} /></div><div><h2>关于心语表情库</h2><p>跨 Windows 与 Android 的私人表情库。</p></div></div><div className="about-row"><span>当前平台</span><strong>{platformName}</strong></div><div className="about-row"><span>数据位置</span><strong>本机 IndexedDB</strong></div><div className="about-row"><span>版本</span><strong>v{CURRENT_VERSION} · 离线优先</strong></div><p className="about-note">参考 OhMyMeme 的快捷调用与复制路径，参考 Rays 的标签、正则搜索和分享思路。原图和元数据不上传云端，在线图库仅在你主动打开时请求。</p></div></div>; }
 function SettingToggle({ title, description, value, onChange }: { title: string; description: string; value: boolean; onChange: (value: boolean) => void }) { return <label className="setting-toggle"><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={value} onChange={(e) => onChange(e.target.checked)} /><i /></label>; }
 
 function ManageModal({ meme, onClose, onEdit, onDelete }: { meme: Meme; onClose: () => void; onEdit: () => void; onDelete: () => void | Promise<void> }) {
