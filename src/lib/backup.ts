@@ -19,18 +19,29 @@ const schema = z.object({
   memes: z.array(metadata).max(10000),
   collections: z.array(z.object({ id: z.string().min(1).max(200), name: z.string().min(1).max(60), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), updatedAt: timestamp })).max(1000),
   tombstones: z.array(z.object({ id: hash, deletedAt: timestamp })).max(50000),
-  settings: z.object({ id: z.literal('preferences'), reduceMotion: z.boolean(), dense: z.boolean(), onlineSupplement: z.boolean() }).optional(),
+  settings: z.object({ id: z.literal('preferences'), reduceMotion: z.boolean(), dense: z.boolean(), onlineSupplement: z.boolean(), floatingWindow: z.boolean().default(false) }).optional(),
 });
 export type Backup = z.infer<typeof schema> & { images: Meme[] };
+export type ExportProgress =
+  | { phase: 'collecting'; completed: number; total: number; bytesCompleted: number; totalBytes: number }
+  | { phase: 'packing'; completed: number; total: number; bytesCompleted: number; totalBytes: number };
 
-export async function exportLibrary(database: LibraryDB = db): Promise<Blob> {
+export async function exportLibrary(database: LibraryDB = db, onProgress?: (progress: ExportProgress) => void): Promise<Blob> {
   const snapshot = await database.transaction('r', database.memes, database.collections, database.tombstones, database.settings, async () => ({
     memes: await database.memes.toArray(), collections: await database.collections.toArray(), tombstones: await database.tombstones.toArray(), settings: await database.settings.get('preferences'),
   }));
-  if (snapshot.memes.reduce((n, m) => n + m.size, 0) > MAX_ARCHIVE) throw new Error('当前版本单个备份最多 256 MB，请先减少库大小');
+  const totalBytes = snapshot.memes.reduce((n, m) => n + m.size, 0);
+  if (totalBytes > MAX_ARCHIVE) throw new Error('当前版本单个备份最多 256 MB，请先减少库大小');
   const files: Record<string, Uint8Array> = {};
-  for (const meme of snapshot.memes) files[`images/${meme.id}`] = new Uint8Array(await meme.blob.arrayBuffer());
+  let bytesCompleted = 0;
+  onProgress?.({ phase: 'collecting', completed: 0, total: snapshot.memes.length, bytesCompleted, totalBytes });
+  for (const [index, meme] of snapshot.memes.entries()) {
+    files[`images/${meme.id}`] = new Uint8Array(await meme.blob.arrayBuffer());
+    bytesCompleted += meme.size;
+    onProgress?.({ phase: 'collecting', completed: index + 1, total: snapshot.memes.length, bytesCompleted, totalBytes });
+  }
   files['manifest.json'] = strToU8(JSON.stringify({ format: 'puff-library', version: 1, exportedAt: Date.now(), ...snapshot, memes: snapshot.memes.map(({ blob: _blob, ...meta }) => meta) }, null, 2));
+  onProgress?.({ phase: 'packing', completed: snapshot.memes.length, total: snapshot.memes.length, bytesCompleted, totalBytes });
   return new Promise((resolve, reject) => zip(files, { level: 0 }, (error, result) => error ? reject(error) : resolve(new Blob([result as Uint8Array<ArrayBuffer>], { type: 'application/zip' }))));
 }
 export async function readBackup(file: Blob, checkDimensions = true): Promise<Backup> {

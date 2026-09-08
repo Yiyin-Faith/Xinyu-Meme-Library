@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('puffDesktop', {
   saveFile: (data, name) => ipcRenderer.invoke('save-file', data, name),
   minimize: () => ipcRenderer.send('minimize'),
   close: () => ipcRenderer.send('close'),
+  setAlwaysOnTop: (enabled) => ipcRenderer.invoke('set-always-on-top', enabled),
   info: () => ipcRenderer.invoke('app-info'),
   onQuickOpen: (callback) => { const listener = () => callback(); ipcRenderer.on('quick-open', listener); return () => ipcRenderer.removeListener('quick-open', listener); },
 });

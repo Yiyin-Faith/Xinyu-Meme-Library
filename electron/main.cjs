@@ -20,6 +20,7 @@ function createWindow() {
 if (hasLock) app.whenReady().then(() => {
   ipcMain.handle('copy-image', (_event, bytes, mime) => { if (!Array.isArray(bytes) || bytes.length > 64 * 1024 * 1024 || mime !== 'image/png') throw new Error('无效图片'); const image = nativeImage.createFromBuffer(Buffer.from(bytes)); if (image.isEmpty()) throw new Error('无法读取图片'); clipboard.writeImage(image); return true; });
   ipcMain.handle('save-file', async (_event, bytes, suggestedName) => { const result = await dialog.showSaveDialog(mainWindow, { defaultPath: suggestedName, filters: [{ name: '心语表情库文件', extensions: [path.extname(suggestedName).replace('.', '') || '*'] }] }); if (result.canceled || !result.filePath) return false; await fs.writeFile(result.filePath, Buffer.from(bytes)); return true; });
+  ipcMain.handle('set-always-on-top', (_event, enabled) => { if (typeof enabled !== 'boolean') throw new Error('无效的悬浮窗设置'); if (!mainWindow) return false; mainWindow.setAlwaysOnTop(enabled); return mainWindow.isAlwaysOnTop(); });
   ipcMain.handle('app-info', () => ({ version: app.getVersion(), shortcut: globalShortcut.isRegistered('CommandOrControl+Shift+P') }));
   globalShortcut.register('CommandOrControl+Shift+P', () => { showWindow(); mainWindow?.webContents.send('quick-open'); });
   ipcMain.on('minimize', () => mainWindow?.minimize());

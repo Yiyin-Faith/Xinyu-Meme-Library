@@ -16,7 +16,17 @@ describe('database migration', () => {
     const upgraded = new LibraryDB(name); databases.push(upgraded);
     expect((await upgraded.collections.orderBy('updatedAt').toArray()).map((c) => c.id)).toEqual(['earlier', 'personal']);
     expect((await upgraded.memes.get('old-image'))?.title).toBe('我的旧表情');
-    expect(upgraded.verno).toBe(3);
+    expect(upgraded.verno).toBe(4);
+  });
+
+  it('adds a disabled floating-window preference to an existing library', async () => {
+    const name = `puff-floating-preference-${crypto.randomUUID()}`;
+    const old = new Dexie(name);
+    old.version(3).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id, updatedAt', tombstones: 'id', settings: 'id' });
+    await old.table('settings').put({ id: 'preferences', reduceMotion: false, dense: true, onlineSupplement: true });
+    old.close();
+    const upgraded = new LibraryDB(name); databases.push(upgraded);
+    expect(await upgraded.settings.get('preferences')).toMatchObject({ floatingWindow: false, onlineSupplement: true });
   });
 
   it('removes legacy built-in demos without touching personal images', async () => {
@@ -39,6 +49,7 @@ describe('database migration', () => {
 
   it('uses a dense grid for a fresh library', () => {
     expect(defaultSettings.dense).toBe(true);
+    expect(defaultSettings.floatingWindow).toBe(false);
   });
 
   it('normalizes and de-duplicates import tags', () => {

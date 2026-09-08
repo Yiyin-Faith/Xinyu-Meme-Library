@@ -6,6 +6,10 @@ import type { Meme } from '../types';
 export const isAndroid = Capacitor.getPlatform() === 'android';
 export const isDesktop = !!window.puffDesktop;
 export const platformName = isDesktop ? 'Windows 客户端' : isAndroid ? 'Android 客户端' : '浏览器体验版';
+export async function setAlwaysOnTop(enabled: boolean): Promise<boolean> {
+  if (!window.puffDesktop) return false;
+  return window.puffDesktop.setAlwaysOnTop(enabled);
+}
 export function extension(mime: string) { return ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/svg+xml': 'svg', 'application/zip': 'zip' } as Record<string, string>)[mime] || 'png'; }
 export function safeFilename(name: string) { return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').slice(0, 100); }
 async function base64(blob: Blob): Promise<string> {

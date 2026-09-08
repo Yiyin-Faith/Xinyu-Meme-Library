@@ -20,11 +20,16 @@ export class LibraryDB extends Dexie {
         if (await tx.table('memes').where('collectionId').equals(collectionId).count() === 0) await tx.table('collections').delete(collectionId);
       }
     });
+    this.version(4).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id, updatedAt', tombstones: 'id', settings: 'id' }).upgrade(async (tx) => {
+      await tx.table('settings').toCollection().modify((settings) => {
+        if (typeof settings.floatingWindow !== 'boolean') settings.floatingWindow = false;
+      });
+    });
   }
 }
 export const db = new LibraryDB();
 export const MAX_IMAGE_SIZE = 32 * 1024 * 1024;
-export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: true, onlineSupplement: false };
+export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: true, onlineSupplement: false, floatingWindow: false };
 export const defaultCollections: Collection[] = [
   { id: 'daily', name: '日常营业', color: '#96af91', updatedAt: 1 },
   { id: 'cute', name: '可爱即正义', color: '#dda898', updatedAt: 1 },

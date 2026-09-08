@@ -39,7 +39,9 @@ try {
   await app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }); }, backupPath);
   await page.getByRole('button', { name: '导入 / 同步', exact: true }).click();
   await page.getByRole('button', { name: '导出', exact: true }).click();
-  await expect(page.locator('.toast')).toContainText('完整备份');
+  await expect(page.locator('.backup-progress.complete')).toContainText('导出完成');
+  await expect(page.locator('.toast')).toContainText('完整备份已导出');
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click();
   await page.getByRole('button', { name: '导入 / 同步', exact: true }).click();
   await page.locator('.backup-option input[type=file]').setInputFiles(backupPath);
   await expect(page.locator('.toast')).toContainText('恢复完成');

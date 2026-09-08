@@ -145,6 +145,26 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
+.setting-toggle.disabled { cursor: not-allowed; opacity: .56; }
+.setting-toggle input:disabled + i { background: #dde5df; }
+.changelog-list { display: grid; gap: 0; padding: 0 0 3px !important; }
+.changelog-entry { padding: 0 0 13px; }
+.changelog-entry + .changelog-entry { padding-top: 12px; border-top: 1px solid rgba(70,100,82,.08); }
+.changelog-entry:last-child { padding-bottom: 2px; }
+.changelog-entry > strong { color: #557362; font-size: 12px; }
+.changelog-entry ul { margin-bottom: 0; }
+.backup-progress { display: grid; gap: 7px; padding: 12px 14px; border: 1px solid rgba(92,139,105,.16); border-radius: 13px; color: #698274; background: rgba(229,244,231,.52); }
+.backup-progress > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11px; }
+.backup-progress > div:first-child span { color: #587362; font-weight: 750; }
+.backup-progress > div:first-child strong { color: #679276; font-size: 10px; }
+.backup-progress small { color: #94a59b; font-size: 10px; }
+.backup-progress.complete { border-color: rgba(91,151,111,.28); background: rgba(220,241,224,.72); }
+.backup-progress.complete > div:first-child strong { color: #3f7654; }
+.backup-progress-track { height: 6px; overflow: hidden; border-radius: 99px; background: rgba(111,151,122,.16); }
+.backup-progress-fill { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #70a580, #4e7d60); transition: width .18s ease; }
+.backup-progress-fill.indeterminate { width: 38%; animation: backup-progress-slide 1.05s ease-in-out infinite; }
+@keyframes backup-progress-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(300%); } }
+
 /* Core three-tab product navigation. Secondary library tools remain in the existing sidebar. */
 .app-shell { padding-bottom: 104px; }
 .layout.single-column { grid-template-columns: minmax(0, 1fr); max-width: 1040px; }

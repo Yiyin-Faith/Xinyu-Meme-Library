@@ -18,7 +18,7 @@ export interface Meme {
 }
 export interface Collection { id: string; name: string; color: string; updatedAt: number }
 export interface Tombstone { id: string; deletedAt: number }
-export interface Settings { id: 'preferences'; reduceMotion: boolean; dense: boolean; onlineSupplement: boolean }
+export interface Settings { id: 'preferences'; reduceMotion: boolean; dense: boolean; onlineSupplement: boolean; floatingWindow: boolean }
 export interface OnlineMeme { id: string; title: string; url: string; tags: string[]; source: string; width: number; height: number }
 export type View = 'all' | 'favorites' | 'recent' | 'online' | 'tags' | 'sync' | 'settings' | `collection:${string}`;
 declare global {
@@ -28,6 +28,7 @@ declare global {
       saveFile(data: number[], name: string): Promise<boolean>;
       minimize(): void;
       close(): void;
+      setAlwaysOnTop(enabled: boolean): Promise<boolean>;
       onQuickOpen(callback: () => void): () => void;
       info(): Promise<{ version: string; shortcut: boolean }>;
     };

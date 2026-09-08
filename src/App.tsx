@@ -5,17 +5,17 @@ import {
   Download, FileImage, FolderPlus, Grid2X2, Heart, History, ImagePlus, Info, Keyboard, Layers3, Menu,
   MessageCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
 } from 'lucide-react';
-import type { Collection, Meme, OnlineMeme, View } from './types';
+import type { Collection, Meme, OnlineMeme, Settings as PreferenceSettings, View } from './types';
 import MemeCard, { useBlobUrl } from './components/MemeCard';
 import Modal from './components/Modal';
 import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, importImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, updateMeme } from './lib/library';
-import { exportLibrary, mergeBackup, readBackup } from './lib/backup';
+import { exportLibrary, mergeBackup, readBackup, type ExportProgress } from './lib/backup';
 import { fetchOnlineImage, searchOnline } from './lib/online';
-import { isAndroid, isDesktop, platformName, saveBlob, useImage } from './lib/platform';
+import { isAndroid, isDesktop, platformName, saveBlob, setAlwaysOnTop, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.4.0';
+const CURRENT_VERSION = '0.4.1';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 function App() {
@@ -51,6 +51,7 @@ function App() {
   useEffect(() => { initializeLibrary().then(() => setReady(true)).catch((error) => { notify(error instanceof Error ? error.message : '表情库初始化失败'); setReady(true); }); }, [notify]);
   useEffect(() => { const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPrimaryTab('library'); document.querySelector<HTMLInputElement>('#global-search')?.focus(); } if (event.key === 'Escape') { setPreviewId(undefined); setManageId(undefined); setEditId(undefined); setImportOpen(false); setBackupOpen(false); setMobileNav(false); } }; window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener); }, []);
   useEffect(() => { if (window.puffDesktop) return window.puffDesktop.onQuickOpen(() => document.querySelector<HTMLInputElement>('#global-search')?.focus()); }, []);
+  useEffect(() => { if (!isDesktop) return; void setAlwaysOnTop(settings.floatingWindow).catch(() => undefined); }, [settings.floatingWindow]);
 
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
   const visibleMemes = useMemo(() => {
@@ -195,8 +196,44 @@ function TagShortcuts({ tags, activeTag, onSelect }: { tags: [string, number][];
   return <div className="tag-shortcuts" aria-label="按标签筛选"><span><Tag size={14} />标签</span>{tags.slice(0, 12).map(([tag, count]) => <button key={tag} type="button" className={activeTag === tag ? 'active' : ''} onClick={() => onSelect(tag)}>#{tag}<em>{count}</em></button>)}</div>;
 }
 
-function SettingsView({ settings, onNotify }: { settings: { reduceMotion: boolean; dense: boolean; onlineSupplement: boolean }; onNotify: (message: string) => void }) { const set = async (key: keyof typeof settings, value: boolean) => { await db.settings.put({ id: 'preferences', ...settings, [key]: value }); onNotify('偏好设置已更新'); }; return <div className="settings-view"><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Zap size={18} /></div><div><h2>使用偏好</h2><p>让心语更贴近你的节奏。</p></div></div><SettingToggle title="紧凑网格" description="每屏显示更多表情，适合大收藏库。" value={settings.dense} onChange={(value) => set('dense', value)} /><SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} /><SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} /></div><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看本次功能变化。</p></div></div><div className="update-row"><span><strong>当前版本</strong><small>v{CURRENT_VERSION}</small></span><button className="glass-button" onClick={() => onNotify(`已是最新版本 v${CURRENT_VERSION}`)}><RefreshCw size={15} /> 检查更新</button></div><details className="changelog"><summary><span>更新日志</span><ChevronRight size={16} /></summary><div><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>导入时可选名称、分组和回车添加标签。</li><li>主页标签可点选筛选，删除调整为管理一级操作。</li></ul></div></details></div><div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Info size={18} /></div><div><h2>关于心语表情库</h2><p>跨 Windows 与 Android 的私人表情库。</p></div></div><div className="about-row"><span>当前平台</span><strong>{platformName}</strong></div><div className="about-row"><span>数据位置</span><strong>本机 IndexedDB</strong></div><div className="about-row"><span>版本</span><strong>v{CURRENT_VERSION} · 离线优先</strong></div><p className="about-note">参考 OhMyMeme 的快捷调用与复制路径，参考 Rays 的标签、正则搜索和分享思路。原图和元数据不上传云端，在线图库仅在你主动打开时请求。</p></div></div>; }
-function SettingToggle({ title, description, value, onChange }: { title: string; description: string; value: boolean; onChange: (value: boolean) => void }) { return <label className="setting-toggle"><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={value} onChange={(e) => onChange(e.target.checked)} /><i /></label>; }
+function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; onNotify: (message: string) => void }) {
+  const set = async (key: Exclude<keyof PreferenceSettings, 'id'>, value: boolean) => {
+    try {
+      if (key === 'floatingWindow') {
+        if (!isDesktop) { onNotify('悬浮窗模式仅支持 Windows 客户端'); return; }
+        const enabled = await setAlwaysOnTop(value);
+        if (enabled !== value) throw new Error('窗口置顶状态没有生效');
+      }
+      await db.settings.put({ ...settings, [key]: value });
+      onNotify(key === 'floatingWindow' ? value ? '悬浮窗模式已开启，窗口会保持在最前' : '悬浮窗模式已关闭' : '偏好设置已更新');
+    } catch (error) { onNotify(error instanceof Error ? error.message : '偏好设置更新失败'); }
+  };
+  return <div className="settings-view">
+    <div className="settings-card glass">
+      <div className="setting-title"><div className="setting-icon"><Zap size={18} /></div><div><h2>使用偏好</h2><p>让心语更贴近你的节奏。</p></div></div>
+      <SettingToggle title="紧凑网格" description="每屏显示更多表情，适合大收藏库。" value={settings.dense} onChange={(value) => set('dense', value)} />
+      <SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} />
+      <SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} />
+      <SettingToggle title="悬浮窗模式" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : '仅 Windows 客户端可用；移动端需要系统级悬浮权限。'} value={settings.floatingWindow} disabled={!isDesktop} onChange={(value) => set('floatingWindow', value)} />
+    </div>
+    <div className="settings-card glass">
+      <div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看功能变化。</p></div></div>
+      <div className="update-row"><span><strong>当前版本</strong><small>v{CURRENT_VERSION}</small></span><button className="glass-button" onClick={() => onNotify(`已是最新版本 v${CURRENT_VERSION}`)}><RefreshCw size={15} /> 检查更新</button></div>
+      <details className="changelog">
+        <summary><span>更新日志</span><ChevronRight size={16} /></summary>
+        <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.4.1</strong><ul><li>完整备份导出会显示读取、打包和保存状态，并保留完成提示。</li><li>新增 Windows 悬浮窗模式，让窗口可保持在最前。</li><li>补全 v0.1.0 ～ v0.3.0 的历史更新记录。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>设置页加入本地更新检查和更新日志入口。</li><li>整理 Windows 与 Android 的 0.4.0 发布版本。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.3.0</strong><ul><li>添加图片支持自定义名称、分组和多个标签。</li><li>标签可从主页直接筛选，管理路径更短。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.2.0</strong><ul><li>图片库默认使用紧凑视图，并移除内置示例表情。</li><li>加入本地 Mock 社区、账号页和模拟发布额度。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.1.0</strong><ul><li>心语表情库首个离线版本：导入、预览、复制/分享和备份迁移可用。</li><li>提供 Windows 与 Android 双端基础体验。</li></ul></section>
+        </div>
+      </details>
+    </div>
+    <div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Info size={18} /></div><div><h2>关于心语表情库</h2><p>跨 Windows 与 Android 的私人表情库。</p></div></div><div className="about-row"><span>当前平台</span><strong>{platformName}</strong></div><div className="about-row"><span>数据位置</span><strong>本机 IndexedDB</strong></div><div className="about-row"><span>版本</span><strong>v{CURRENT_VERSION} · 离线优先</strong></div><p className="about-note">参考 OhMyMeme 的快捷调用与复制路径，参考 Rays 的标签、正则搜索和分享思路。原图和元数据不上传云端，在线图库仅在你主动打开时请求。</p></div>
+  </div>;
+}
+function SettingToggle({ title, description, value, onChange, disabled = false }: { title: string; description: string; value: boolean; onChange: (value: boolean) => void; disabled?: boolean }) { return <label className={`setting-toggle ${disabled ? 'disabled' : ''}`}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={value} disabled={disabled} onChange={(e) => onChange(e.target.checked)} /><i /></label>; }
 
 function ManageModal({ meme, onClose, onEdit, onDelete }: { meme: Meme; onClose: () => void; onEdit: () => void; onDelete: () => void | Promise<void> }) {
   const url = useBlobUrl(meme.blob);
@@ -220,6 +257,50 @@ function ImportModal({ collections, initialFiles, onClose, onNotify }: { collect
   return <Modal title="添加图片" subtitle="名称、分组和标签都可不填；点击添加后会立即入库。" onClose={busy ? () => undefined : onClose}><form className="import-modal" onSubmit={(event) => { void submit(event); }}><input ref={input} className="native-file-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => choose(event.target.files ?? [])} /><button type="button" className="import-picker" onClick={openPicker} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files); }}><ImagePlus size={30} /><strong>{files.length ? `已选择 ${files.length} 张图片` : '点击选择，或把图片拖进来'}</strong><span>{files.length > 1 && title.trim() ? '批量导入时会在自定义名称后追加序号' : '支持批量导入，内容相同的图片会自动去重'}</span></button><label>自定义名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder={files.length > 1 ? '例如：猫猫反应（会自动加序号）' : '不填则使用图片文件名'} /></label><label>分组（可选，可直接新建）<input list="collection-options" value={groupName} onChange={(event) => setGroupName(event.target.value)} maxLength={40} placeholder="例如：日常、游戏、工作" /><datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist></label><label>标签（可选）<div className="tag-editor">{tags.map((tag) => <span key={tag}>#{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}><X size={12} /></button></span>)}<input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } }} placeholder={tags.length ? '继续输入标签' : '输入后按回车添加一个标签'} /></div><small>按回车添加一个标签；不填也可以直接入库。</small></label><div className="import-actions"><button type="button" className="glass-button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '正在入库…' : files.length ? `添加 ${files.length} 张` : '选择图片'}</button></div></form></Modal>;
 }
 
-function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) { const input = useRef<HTMLInputElement>(null); const [busy, setBusy] = useState(false); const [deletions, setDeletions] = useState(true); const [restoreSettings, setRestoreSettings] = useState(false); const create = async () => { setBusy(true); try { const blob = await exportLibrary(); await saveBlob(blob, `xinyu-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`); onNotify('完整备份已生成'); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '备份失败'); } finally { setBusy(false); } }; const restore = async (file: File) => { setBusy(true); try { const backup = await readBackup(file); const result = await mergeBackup(backup, deletions, restoreSettings); onNotify(`恢复完成：新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); } finally { setBusy(false); } }; return <Modal title="导入与同步" subtitle="心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。" onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>原图和所有标签、备注、收藏夹都会写进一个 ZIP。</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> 导出</button></div><div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效和在线补充开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>; }
+type BackupStatus = ExportProgress | { phase: 'saving' | 'complete'; fileName: string };
+
+function BackupProgressPanel({ status }: { status: BackupStatus }) {
+  const collecting = status.phase === 'collecting';
+  const indeterminate = status.phase === 'packing' || status.phase === 'saving';
+  const percentage = collecting && status.total ? Math.round((status.completed / status.total) * 100) : status.phase === 'complete' ? 100 : 0;
+  const label = collecting ? `正在读取图片 ${status.completed} / ${status.total}` : status.phase === 'packing' ? '正在生成 ZIP 备份' : status.phase === 'saving' ? '正在保存备份文件' : '导出完成';
+  const detail = status.phase === 'collecting' ? `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}` : status.phase === 'packing' ? '正在把原图和信息写入备份包' : status.phase === 'saving' ? (isAndroid ? '请在系统面板选择保存位置或发送方式' : '正在写入你选择的位置') : `${status.fileName} 已准备好`;
+  return <div className={`backup-progress ${status.phase}`} role="status" aria-live="polite"><div><span>{label}</span><strong>{collecting ? `${percentage}%` : status.phase === 'complete' ? '已完成' : status.phase === 'packing' ? '正在打包' : '正在保存'}</strong></div><div className="backup-progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} aria-valuetext={detail}><i className={`backup-progress-fill ${indeterminate ? 'indeterminate' : ''}`} style={indeterminate ? undefined : { width: `${percentage}%` }} /></div><small>{detail}</small></div>;
+}
+
+function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [deletions, setDeletions] = useState(true);
+  const [restoreSettings, setRestoreSettings] = useState(false);
+  const [exportStatus, setExportStatus] = useState<BackupStatus>();
+  const create = async () => {
+    const fileName = `xinyu-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`;
+    setBusy(true);
+    setExportStatus({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
+    try {
+      const blob = await exportLibrary(undefined, setExportStatus);
+      setExportStatus({ phase: 'saving', fileName });
+      const saved = await saveBlob(blob, fileName);
+      if (!saved) { setExportStatus(undefined); onNotify('已取消导出，备份未保存'); return; }
+      setExportStatus({ phase: 'complete', fileName });
+      onNotify(isAndroid ? '完整备份已生成，已打开系统保存/分享' : '完整备份已导出');
+    } catch (error) { setExportStatus(undefined); onNotify(error instanceof Error ? error.message : '备份失败'); }
+    finally { setBusy(false); }
+  };
+  const restore = async (file: File) => {
+    setBusy(true);
+    setExportStatus(undefined);
+    try {
+      const backup = await readBackup(file);
+      const result = await mergeBackup(backup, deletions, restoreSettings);
+      onNotify(`恢复完成：新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`);
+      onClose();
+    } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); }
+    finally { setBusy(false); }
+  };
+  const exportButtonText = busy ? exportStatus?.phase === 'collecting' ? '正在读取…' : exportStatus?.phase === 'packing' ? '正在打包…' : '正在保存…' : exportStatus?.phase === 'complete' ? '再次导出' : '导出';
+  return <Modal title="导入与同步" subtitle="心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。" onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>原图和所有标签、备注、收藏夹都会写进一个 ZIP。</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
+}
 
 export default App;
