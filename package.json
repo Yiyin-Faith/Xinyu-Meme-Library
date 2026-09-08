@@ -51,6 +51,6 @@
     "directories": { "output": "release/PC" },
     "files": ["dist/**/*", "electron/**/*", "package.json", "LICENSE", "THIRD_PARTY_NOTICES.md", "!node_modules/**/*"],
     "win": { "target": "nsis", "icon": "electron/icon.ico", "executableName": "xinyu-meme-library", "signAndEditExecutable": false },
-    "nsis": { "artifactName": "Xinyu-Meme-Library-${version}-Setup.exe", "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false }
+    "nsis": { "artifactName": "Xinyu-Meme-Library-${version}-Setup.exe", "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false }
   }
 }
