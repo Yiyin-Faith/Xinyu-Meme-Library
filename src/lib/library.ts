@@ -30,6 +30,13 @@ export const defaultCollections: Collection[] = [
   { id: 'cute', name: '可爱即正义', color: '#dda898', updatedAt: 1 },
   { id: 'work', name: '打工人的精神状态', color: '#aaa2c1', updatedAt: 1 },
 ];
+const collectionColors = ['#9cb99a', '#dba79b', '#aaa2c3', '#d5b27c'];
+
+export interface ImportOptions {
+  collectionId?: string;
+  title?: string;
+  tags?: string[];
+}
 
 export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -69,12 +76,39 @@ export async function prepareImage(file: Blob, title: string, collectionId = '',
   const now = Date.now();
   return { id, blob, ...dimensions, title: title.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名表情', tags: [], note: '', collectionId, favorite: false, createdAt: now, updatedAt: now, lastUsedAt: 0, useCount: 0, mime, size: blob.size, source };
 }
-export async function importImages(files: File[], collectionId = '') {
+export function normalizeTags(tags: string[]) {
+  const seen = new Set<string>();
+  return tags.map((tag) => tag.normalize('NFKC').trim().replace(/^#+/, '').trim()).filter((tag) => {
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 30);
+}
+export async function getOrCreateCollection(name: string) {
+  const trimmed = name.normalize('NFKC').trim().slice(0, 40);
+  if (!trimmed) return undefined;
+  const normalized = trimmed.toLocaleLowerCase();
+  const existing = await db.collections.filter((collection) => collection.name.normalize('NFKC').trim().toLocaleLowerCase() === normalized).first();
+  if (existing) return existing;
+  const count = await db.collections.count();
+  const collection: Collection = { id: crypto.randomUUID(), name: trimmed, color: collectionColors[count % collectionColors.length], updatedAt: Date.now() };
+  await db.collections.add(collection);
+  return collection;
+}
+export async function importImages(files: File[], options: ImportOptions | string = '') {
+  const importOptions: ImportOptions = typeof options === 'string' ? { collectionId: options } : options;
+  const collectionId = importOptions.collectionId ?? '';
+  const customTitle = importOptions.title?.trim().slice(0, 120) ?? '';
+  const tags = normalizeTags(importOptions.tags ?? []);
   let added = 0, skipped = 0;
   const errors: string[] = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     try {
-      const meme = await prepareImage(file, file.name, collectionId);
+      const title = customTitle ? (files.length === 1 ? customTitle : `${customTitle} ${index + 1}`) : file.name;
+      const meme = await prepareImage(file, title, collectionId);
+      if (customTitle) meme.title = title;
+      meme.tags = tags;
       await db.transaction('rw', db.memes, db.tombstones, async () => {
         if (await db.memes.get(meme.id)) { skipped++; return; }
         await db.memes.add(meme);

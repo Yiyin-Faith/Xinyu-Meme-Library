@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import Dexie from 'dexie';
 import { afterEach, describe, expect, it } from 'vitest';
-import { defaultSettings, LibraryDB } from '../src/lib/library';
+import { defaultSettings, LibraryDB, normalizeTags } from '../src/lib/library';
 const databases: LibraryDB[] = [];
 afterEach(async () => { for (const db of databases.splice(0)) await db.delete(); });
 
@@ -39,5 +39,9 @@ describe('database migration', () => {
 
   it('uses a dense grid for a fresh library', () => {
     expect(defaultSettings.dense).toBe(true);
+  });
+
+  it('normalizes and de-duplicates import tags', () => {
+    expect(normalizeTags([' #开心 ', '开心', ' 反应 ', '', '##朋友'])).toEqual(['开心', '反应', '朋友']);
   });
 });

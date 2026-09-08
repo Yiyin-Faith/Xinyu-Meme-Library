@@ -12,7 +12,7 @@ export function useBlobUrl(blob?: Blob) {
   }, [blob]);
   return url;
 }
-export default function MemeCard({ meme, active, selecting, selected, onPreview, onManage, onFavorite, onUse, onSelect }: { meme: Meme; active: boolean; selecting: boolean; selected: boolean; onPreview: () => void; onManage: () => void; onFavorite: () => void; onUse: () => void; onSelect: () => void }) {
+export default function MemeCard({ meme, active, selecting, selected, onPreview, onManage, onFavorite, onUse, onTagSelect, onSelect }: { meme: Meme; active: boolean; selecting: boolean; selected: boolean; onPreview: () => void; onManage: () => void; onFavorite: () => void; onUse: () => void; onTagSelect: (tag: string) => void; onSelect: () => void }) {
   const url = useBlobUrl(meme.blob);
   const longPress = useRef<number | undefined>(undefined);
   const didLongPress = useRef(false);
@@ -35,6 +35,6 @@ export default function MemeCard({ meme, active, selecting, selected, onPreview,
     </button>
     {!selecting && <button className={`favorite-button ${meme.favorite ? 'on' : ''}`} aria-label={`${meme.favorite ? '取消喜欢' : '喜欢'} ${meme.title}`} onClick={onFavorite}><Heart size={16} fill={meme.favorite ? 'currentColor' : 'none'} /></button>}
     <div className="card-caption"><button onClick={onPreview} className="card-name">{meme.title}</button><button className="card-more icon-button" aria-label={`管理 ${meme.title}`} onClick={onManage}><MoreHorizontal size={17} /></button></div>
-    <div className="card-bottom"><span>{meme.tags.slice(0, 2).map((tag) => `# ${tag}`).join('  ') || '添加一点小标签'}</span><button className="quick-copy" onClick={onUse} aria-label={`${isAndroid ? '分享' : '复制'} ${meme.title}`}>{isAndroid ? <Share2 size={13} /> : <Copy size={13} />}</button></div>
+    <div className="card-bottom"><div className="card-tags">{meme.tags.length ? meme.tags.slice(0, 2).map((tag) => <button key={tag} type="button" onClick={() => onTagSelect(tag)}># {tag}</button>) : <span>添加一点小标签</span>}</div><button className="quick-copy" onClick={onUse} aria-label={`${isAndroid ? '分享' : '复制'} ${meme.title}`}>{isAndroid ? <Share2 size={13} /> : <Copy size={13} />}</button></div>
   </article>;
 }
