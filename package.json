@@ -12,7 +12,7 @@
     "build": "tsc -b && vite build",
     "desktop": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --win dir",
-    "desktop:dist": "npm run build && electron-builder --win portable",
+    "desktop:dist": "npm run build && electron-builder --win nsis --publish never",
     "android:sync": "npm run build && cap sync android",
     "android:build": "npm run android:sync && node scripts/build-android.mjs",
     "test": "vitest run",
@@ -48,9 +48,9 @@
   "build": {
     "appId": "com.puff.meme",
     "electronDist": "node_modules/electron/dist",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "electron/**/*", "package.json", "LICENSE", "THIRD_PARTY_NOTICES.md"],
-    "win": { "target": "portable", "executableName": "xinyu-meme-library", "signAndEditExecutable": false },
-    "portable": { "artifactName": "Xinyu-Meme-Library-${version}-Windows.exe" }
+    "directories": { "output": "release/PC" },
+    "files": ["dist/**/*", "electron/**/*", "package.json", "LICENSE", "THIRD_PARTY_NOTICES.md", "!node_modules/**/*"],
+    "win": { "target": "nsis", "icon": "electron/icon.ico", "executableName": "xinyu-meme-library", "signAndEditExecutable": false },
+    "nsis": { "artifactName": "Xinyu-Meme-Library-${version}-Setup.exe", "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false }
   }
 }

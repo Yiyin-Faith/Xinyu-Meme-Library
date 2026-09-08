@@ -26,7 +26,7 @@ docs/                 使用说明和 GitHub 协作说明
 .github/workflows/    GitHub Actions 持续集成
 ```
 
-`node_modules/`、`dist/`、`release/`、`.tools/`、Android 构建目录和验证截图已经写入 `.gitignore`，不会被上传到 GitHub。发布 APK 和 Windows 包建议放到 GitHub Releases，而不是提交到源码仓库。
+`node_modules/`、`dist/`、`release/`、`.tools/`、Android 构建目录和验证截图已经写入 `.gitignore`，不会被上传到 GitHub。发布文件会按平台放在 `release/PC/` 和 `release/Android/`，源码目录仍保留在仓库根目录。
 
 ## 使用和构建
 
@@ -34,8 +34,8 @@ docs/                 使用说明和 GitHub 协作说明
 
 ```powershell
 npm install
-npm run desktop:pack       # 生成 release/win-unpacked/，用于 Windows 测试
-npm run desktop:dist       # 生成 Windows portable 包
+npm run desktop:pack       # 生成 release/PC/win-unpacked/，用于 Windows 测试
+npm run desktop:dist       # 生成 Windows 安装包
 npm test                   # 运行单元测试
 node scripts/verify-desktop.mjs
 ```
@@ -46,7 +46,7 @@ Android 需要 JDK 21、Android SDK Platform 36 和 Build Tools 36：
 npm run android:build
 ```
 
-构建结果会写入 `release/Xinyu-Meme-Library-版本号-Android-debug.apk`。Android 应用的包名 `com.puff.meme` 是历史兼容标识，不能随意修改，否则系统会把它识别为新应用。
+构建结果会写入 `release/Android/Xinyu-Meme-Library-版本号-Android.apk`。Android 应用的包名 `com.puff.meme` 是历史兼容标识，不能随意修改，否则系统会把它识别为新应用。
 
 完整使用说明见 [`docs/使用说明.md`](docs/使用说明.md)。
 

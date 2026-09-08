@@ -14,6 +14,7 @@ try {
   await writeFile('public/icon.ico', Buffer.concat([header, png]));
   await mkdir('electron', { recursive: true });
   await writeFile('electron/icon.png', png);
+  await writeFile('electron/icon.ico', Buffer.concat([header, png]));
   for (const [density, size] of [['mdpi', 48], ['hdpi', 72], ['xhdpi', 96], ['xxhdpi', 144], ['xxxhdpi', 192]]) {
     await page.setViewportSize({ width: size, height: size });
     const data = await page.screenshot({ omitBackground: true });

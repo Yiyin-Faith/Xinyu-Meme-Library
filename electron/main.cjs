@@ -10,8 +10,7 @@ if (!hasLock) app.quit();
 app.on('second-instance', showWindow);
 app.on('before-quit', () => { quitting = true; });
 function createWindow() {
-  mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 980, minHeight: 620, icon: path.join(__dirname, 'icon.png'), title: '心语表情库', backgroundColor: '#e9f0ea', show: false, autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 980, minHeight: 620, icon: path.join(__dirname, 'icon.png'), title: '心语表情库', backgroundColor: '#e9f0ea', show: true, autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.on('close', (event) => { if (!quitting && tray) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
