@@ -29,3 +29,10 @@ Thumbs.db
 android/.cxx/
 android/.idea/
 android/.kotlin/
+
+# Android distribution signing material (never commit)
+*.jks
+*.keystore
+*.p12
+android/signing.properties
+android/signing.local.properties

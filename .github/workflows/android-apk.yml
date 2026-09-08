@@ -9,8 +9,32 @@ permissions:
   contents: read
 
 jobs:
+  signing-ready:
+    name: Check release signing
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.signing.outputs.ready }}
+    steps:
+      - id: signing
+        name: Check signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "固定 Android 发布签名已配置。"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置完整的 Android 发布签名；已跳过 APK 产物，避免重新生成临时签名。参见 docs/Android签名说明.md。"
+          fi
+
   build-apk:
     name: Build Android APK
+    needs: signing-ready
+    if: needs.signing-ready.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,10 +56,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Create temporary debug signing key
+      - name: Restore fixed release signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          mkdir -p ~/.android
-          keytool -genkeypair -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Xinyu Meme Library,C=US" -noprompt
+          signing_dir="$RUNNER_TEMP/xinyu-signing"
+          keystore="$signing_dir/xinyu-release.jks"
+          mkdir -p "$signing_dir"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          keytool -list -keystore "$keystore" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
+          {
+            echo "PUFF_ANDROID_KEYSTORE=$keystore"
+            echo "PUFF_ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "PUFF_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            echo "PUFF_ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            echo "PUFF_ANDROID_REQUIRE_SIGNING=1"
+          } >> "$GITHUB_ENV"
 
       - name: Build release APK
         run: npm run android:build
@@ -47,3 +87,11 @@ jobs:
           path: release/Android/Xinyu-Meme-Library-*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          keystore="$RUNNER_TEMP/xinyu-signing/xinyu-release.jks"
+          if [ -f "$keystore" ]; then
+            shred -u "$keystore" 2>/dev/null || rm -f "$keystore"
+          fi

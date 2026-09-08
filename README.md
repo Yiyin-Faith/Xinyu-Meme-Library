@@ -50,7 +50,7 @@ Android 需要 JDK 21、Android SDK Platform 36 和 Build Tools 36：
 npm run android:build
 ```
 
-构建结果会写入 `release/Android/Xinyu-Meme-Library-版本号-Android.apk`。Android 应用的包名 `com.puff.meme` 是历史兼容标识，不能随意修改，否则系统会把它识别为新应用。
+构建结果会写入 `release/Android/Xinyu-Meme-Library-版本号-Android.apk`。Android 应用的包名 `com.puff.meme` 是历史兼容标识，不能随意修改，否则系统会把它识别为新应用。发布包必须使用固定的 release 签名；密钥配置、GitHub Actions Secret 名称与首次换签名的迁移说明见 [`docs/Android签名说明.md`](docs/Android签名说明.md)。
 
 完整使用说明见 [`docs/使用说明.md`](docs/使用说明.md)。
 

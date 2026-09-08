@@ -15,7 +15,7 @@ import { isAndroid, isDesktop, platformName, saveBlob, setAlwaysOnTop, useImage 
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.4.1';
+const CURRENT_VERSION = '0.4.2';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 function App() {
@@ -222,6 +222,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 发布包改为固定签名，后续版本可保持覆盖安装。</li><li>GitHub 构建缺少固定签名时将不再生成临时签名 APK。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.1</strong><ul><li>完整备份导出会显示读取、打包和保存状态，并保留完成提示。</li><li>新增 Windows 悬浮窗模式，让窗口可保持在最前。</li><li>补全 v0.1.0 ～ v0.3.0 的历史更新记录。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>设置页加入本地更新检查和更新日志入口。</li><li>整理 Windows 与 Android 的 0.4.0 发布版本。</li></ul></section>
           <section className="changelog-entry"><strong>v0.3.0</strong><ul><li>添加图片支持自定义名称、分组和多个标签。</li><li>标签可从主页直接筛选，管理路径更短。</li></ul></section>
