@@ -1,5 +1,6 @@
 import hashlib
 import pathlib
+import platform
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -7,11 +8,14 @@ import zipfile
 root = pathlib.Path(__file__).resolve().parent.parent / '.tools'
 sdk = root / 'android-sdk'
 xml = ET.fromstring(urllib.request.urlopen('https://dl.google.com/android/repository/repository2-3.xml', timeout=20).read())
+host = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macosx'}.get(platform.system())
+if not host:
+    raise RuntimeError(f'Unsupported host operating system: {platform.system()}')
 for name, location in [('platforms;android-36', 'platforms/android-36'), ('build-tools;36.0.0', 'build-tools/36.0.0')]:
     if name.startswith('build-tools;') and (sdk / location / 'source.properties').exists():
         continue
     pkg = next(n for n in xml if n.attrib.get('path') == name)
-    archive = next(n for n in pkg.findall('.//archive') if n.findtext('host-os') in ('windows', None))
+    archive = next(n for n in pkg.findall('.//archive') if n.findtext('host-os') in (host, None))
     item = archive.find('complete')
     dest = root / (name.replace(';', '-') + '.zip')
     digest = hashlib.sha1()

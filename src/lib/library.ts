@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { Collection, Meme, Settings, Tombstone } from '../types';
-import { samples } from './samples';
+
+const legacyDefaultCollectionIds = ['daily', 'cute', 'work'];
 
 export class LibraryDB extends Dexie {
   memes!: EntityTable<Meme, 'id'>;
@@ -12,11 +13,18 @@ export class LibraryDB extends Dexie {
     this.version(1).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id', tombstones: 'id', settings: 'id' });
     // v1 ordered collections by an unindexed field, which throws while mounting the UI.
     this.version(2).stores({ collections: 'id, updatedAt' });
+    this.version(3).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id, updatedAt', tombstones: 'id', settings: 'id' }).upgrade(async (tx) => {
+      // Only remove the old built-in demo records; user-imported images always have a different source.
+      await tx.table('memes').filter((m) => m.source === '心语表情库原创示例').delete();
+      for (const collectionId of legacyDefaultCollectionIds) {
+        if (await tx.table('memes').where('collectionId').equals(collectionId).count() === 0) await tx.table('collections').delete(collectionId);
+      }
+    });
   }
 }
 export const db = new LibraryDB();
 export const MAX_IMAGE_SIZE = 32 * 1024 * 1024;
-export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: false, onlineSupplement: false };
+export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: true, onlineSupplement: false };
 export const defaultCollections: Collection[] = [
   { id: 'daily', name: '日常营业', color: '#96af91', updatedAt: 1 },
   { id: 'cute', name: '可爱即正义', color: '#dda898', updatedAt: 1 },
@@ -97,15 +105,8 @@ let seedPromise: Promise<void> | undefined;
 export function initializeLibrary() {
   return seedPromise ??= (async () => {
     if (await db.settings.get('preferences')) return;
-    const memes: Meme[] = [];
-    for (const [index, sample] of samples.entries()) {
-      const item = await prepareImage(new Blob([sample.svg], { type: 'image/svg+xml' }), sample.title, sample.collectionId, '心语表情库原创示例');
-      memes.push({ ...item, tags: sample.tags, favorite: !!sample.favorite, createdAt: Date.now() - index * 3600000, note: '心语表情库内置的原创示例表情，可以自由使用，也可以删除后导入自己的收藏。' });
-    }
-    await db.transaction('rw', db.memes, db.collections, db.settings, async () => {
+    await db.transaction('rw', db.settings, async () => {
       if (await db.settings.get('preferences')) return;
-      await db.collections.bulkPut(defaultCollections);
-      await db.memes.bulkPut(memes);
       await db.settings.put(defaultSettings);
     });
     navigator.storage?.persist?.().catch(() => undefined);

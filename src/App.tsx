@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Archive, ArrowDownToLine, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy,
   Download, FileImage, FolderPlus, Grid2X2, Heart, History, ImagePlus, Info, Keyboard, Layers3, Menu,
-  MoreHorizontal, Pencil, Plus, Search, Settings, Share2, Sparkles, Tag, Trash2, Upload, X, Zap,
+  MessageCircle, MoreHorizontal, Pencil, Plus, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
 } from 'lucide-react';
 import type { Collection, Meme, OnlineMeme, View } from './types';
 import MemeCard, { useBlobUrl } from './components/MemeCard';
@@ -12,23 +12,26 @@ import { db, defaultSettings, deleteMemes, formatBytes, importImages, initialize
 import { exportLibrary, mergeBackup, readBackup } from './lib/backup';
 import { fetchOnlineImage, searchOnline } from './lib/online';
 import { isAndroid, isDesktop, platformName, saveBlob, useImage } from './lib/platform';
+import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
+type PrimaryTab = 'community' | 'library' | 'profile';
 
 function App() {
   const memes = useLiveQuery(() => db.memes.orderBy('createdAt').reverse().toArray(), []) ?? [];
   const collections = useLiveQuery(() => db.collections.orderBy('updatedAt').toArray(), []) ?? [];
   const settings = useLiveQuery(() => db.settings.get('preferences'), []) ?? defaultSettings;
   const [ready, setReady] = useState(false);
+  const [primaryTab, setPrimaryTab] = useState<PrimaryTab>('library');
   const [view, setView] = useState<View>('all');
   const [search, setSearch] = useState('');
   const [online, setOnline] = useState<OnlineMeme[]>([]);
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineError, setOnlineError] = useState('');
   const [selectedId, setSelectedId] = useState<string>();
+  const [previewId, setPreviewId] = useState<string>();
   const [editId, setEditId] = useState<string>();
   const [toast, setToast] = useState('');
-  const [importOpen, setImportOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [selecting, setSelecting] = useState(false);
@@ -36,10 +39,14 @@ function App() {
   const [tagFilter, setTagFilter] = useState('');
   const [collectionOpen, setCollectionOpen] = useState(false);
   const [collectionName, setCollectionName] = useState('');
+  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
+  const [mockProfile, setMockProfile] = useState<MockProfile>();
+  const [uploadQuota, setUploadQuota] = useState<UploadQuota>();
+  const imagePickerRef = useRef<HTMLInputElement>(null);
 
   const notify = useCallback((message: string) => { setToast(message); window.setTimeout(() => setToast(''), 3000); }, []);
   useEffect(() => { initializeLibrary().then(() => setReady(true)).catch((error) => { notify(error instanceof Error ? error.message : '表情库初始化失败'); setReady(true); }); }, [notify]);
-  useEffect(() => { const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); document.querySelector<HTMLInputElement>('#global-search')?.focus(); } if (event.key === 'Escape') { setEditId(undefined); setImportOpen(false); setBackupOpen(false); setMobileNav(false); } }; window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener); }, []);
+  useEffect(() => { const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPrimaryTab('library'); document.querySelector<HTMLInputElement>('#global-search')?.focus(); } if (event.key === 'Escape') { setPreviewId(undefined); setEditId(undefined); setBackupOpen(false); setMobileNav(false); } }; window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener); }, []);
   useEffect(() => { if (window.puffDesktop) return window.puffDesktop.onQuickOpen(() => document.querySelector<HTMLInputElement>('#global-search')?.focus()); }, []);
 
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
@@ -54,8 +61,32 @@ function App() {
     }).sort((a, b) => view === 'recent' ? b.lastUsedAt - a.lastUsedAt : b.createdAt - a.createdAt);
   }, [memes, view, search, tagFilter]);
   const selectedMeme = memes.find((m) => m.id === selectedId);
+  const previewMeme = memes.find((m) => m.id === previewId);
   const editMeme = memes.find((m) => m.id === editId);
   const currentTitle = view.startsWith('collection:') ? collections.find((c) => c.id === view.slice(11))?.name || '收藏夹' : viewLabels[view] || '全部表情';
+
+  const refreshCommunity = useCallback(async () => {
+    const [posts, profile, quota] = await Promise.all([communityData.listPosts(), communityData.getProfile(), communityData.getQuota()]);
+    setCommunityPosts(posts); setMockProfile(profile); setUploadQuota(quota);
+  }, []);
+  useEffect(() => { void refreshCommunity(); }, [refreshCommunity]);
+
+  async function importImmediately(files: FileList | null) {
+    if (!files?.length) return;
+    try {
+      const result = await importImages([...files]);
+      const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : '';
+      notify(`已入库 ${result.added} 张，跳过 ${result.skipped} 张${detail}`);
+    } catch (error) { notify(error instanceof Error ? error.message : '导入失败'); }
+  }
+  function openImagePicker() {
+    const input = imagePickerRef.current;
+    if (!input) return;
+    input.value = '';
+    const picker = input as HTMLInputElement & { showPicker?: () => void };
+    try { if (picker.showPicker) { picker.showPicker(); return; } } catch { /* fall back to click for WebView and older browsers */ }
+    input.click();
+  }
 
   async function copyMeme(meme: Meme, share = false) { try { const result = await useImage(meme, share); if (!result.includes('取消')) await markUsed(meme.id); notify(result); } catch (error) { notify(error instanceof Error ? error.message : '操作失败'); } }
   async function deleteSelected() { const ids = selecting && selected.size ? [...selected] : selectedId ? [selectedId] : []; if (!ids.length) return; await deleteMemes(ids); setSelected(new Set()); setSelecting(false); setSelectedId(undefined); notify(`已移除 ${ids.length} 张表情`); }
@@ -71,18 +102,20 @@ function App() {
   useEffect(() => { if (view !== 'online') return; const handle = window.setTimeout(loadOnline, search ? 380 : 0); return () => window.clearTimeout(handle); }, [view, search, settings.onlineSupplement]);
   async function useOnline(item: OnlineMeme) { try { const meme = await fetchOnlineImage(item); notify(await useImage(meme, !isDesktop)); } catch (error) { notify(error instanceof Error ? error.message : '在线表情使用失败'); } }
   async function saveOnline(item: OnlineMeme) { try { const meme = await fetchOnlineImage(item); const exists = await db.memes.get(meme.id); if (exists) { notify('这张表情已在本地库中'); return; } await db.memes.add({ ...meme, tags: item.tags.slice(0, 20), source: item.source }); notify('已保存到本地表情库'); } catch (error) { notify(error instanceof Error ? error.message : '保存失败'); } }
+  async function toggleCommunityLike(postId: string) { try { await communityData.toggleLike(postId); await refreshCommunity(); } catch (error) { notify(error instanceof Error ? error.message : '操作失败'); } }
+  async function publishToCommunity(meme: Meme) { try { await communityData.publishMeme(meme); await refreshCommunity(); setPreviewId(undefined); setPrimaryTab('community'); notify('已模拟发布到本地社区，不会上传真实图片'); } catch (error) { notify(error instanceof Error ? error.message : '模拟发布失败'); } }
 
   if (!ready) return <div className="loading-screen"><div className="brand-mark">心</div><strong>正在打开你的心语表情库</strong><span>离线数据只保存在这台设备上</span></div>;
-  return <div className={`app-shell ${settings.reduceMotion ? 'reduce-motion' : ''}`}>
+  return <div className={`app-shell primary-${primaryTab} ${settings.reduceMotion ? 'reduce-motion' : ''}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
     <header className="topbar glass">
-      <button className="mobile-menu icon-button" aria-label="打开导航" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-      <button className="brand" onClick={() => { setView('all'); setSearch(''); }}><span className="brand-icon">心</span><span><strong>心语表情库</strong><small>MEME LIBRARY</small></span></button>
+      {primaryTab === 'library' && <button className="mobile-menu icon-button" aria-label="打开导航" onClick={() => setMobileNav(true)}><Menu size={20} /></button>}
+      <button className="brand" onClick={() => { setPrimaryTab('library'); setView('all'); setSearch(''); }}><span className="brand-icon">心</span><span><strong>心语表情库</strong><small>MEME LIBRARY</small></span></button>
       <div className="topbar-status"><span className="status-dot" />{platformName}<span className="status-separator" />{memes.length} 张私藏</div>
-      <div className="topbar-actions"><button className="glass-button subtle" onClick={() => setBackupOpen(true)}><ArrowUpFromLine size={16} /> <span>导入 / 同步</span></button><button className="primary-button" onClick={() => setImportOpen(true)}><Plus size={18} /><span>添加表情</span></button><button className="icon-button window-action" aria-label="更多" onClick={() => setView('settings')}><MoreHorizontal size={19} /></button></div>
+      <div className="topbar-actions"><button className="glass-button subtle" onClick={() => setBackupOpen(true)}><ArrowUpFromLine size={16} /> <span>导入 / 同步</span></button><button className="primary-button" onClick={openImagePicker}><Plus size={18} /><span>添加图片</span></button><button className="icon-button window-action" aria-label="更多" onClick={() => { setPrimaryTab('library'); setView('settings'); }}><MoreHorizontal size={19} /></button></div>
     </header>
-    <div className="layout">
-      <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
+    <div className={`layout ${primaryTab === 'library' ? '' : 'single-column'}`}>
+      {primaryTab === 'library' && <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
         <div className="sidebar-mobile-head"><strong>心语表情库</strong><button className="icon-button" aria-label="关闭导航" onClick={() => setMobileNav(false)}><X size={19} /></button></div>
         <div className="nav-section"><span className="nav-label">我的表情</span>
           <NavButton icon={<Grid2X2 size={17} />} label="全部表情" count={memes.length} active={view === 'all'} onClick={() => { setView('all'); setMobileNav(false); }} />
@@ -92,26 +125,65 @@ function App() {
         <div className="nav-section collections"><div className="nav-label-row"><span className="nav-label">收藏夹</span><button className="mini-add" aria-label="新建收藏夹" onClick={addCollection}><Plus size={14} /></button></div>{collections.map((collection) => <NavButton key={collection.id} icon={<span className="collection-dot" style={{ background: collection.color }} />} label={collection.name} count={memes.filter((m) => m.collectionId === collection.id).length} active={view === `collection:${collection.id}`} onClick={() => { setView(`collection:${collection.id}`); setMobileNav(false); }} />)}<button className="add-collection" onClick={addCollection}><FolderPlus size={15} /> 新建收藏夹</button></div>
         <div className="nav-section sidebar-tools"><span className="nav-label">探索与工具</span><NavButton icon={<Sparkles size={17} />} label="在线补充" active={view === 'online'} onClick={() => { setView('online'); setMobileNav(false); }} /><NavButton icon={<Tag size={17} />} label="标签管理" count={tags.length} active={view === 'tags'} onClick={() => { setView('tags'); setMobileNav(false); }} /><NavButton icon={<Archive size={17} />} label="导入与同步" active={view === 'sync'} onClick={() => { setView('sync'); setMobileNav(false); }} /></div>
         <div className="sidebar-bottom"><button className="nav-button" onClick={() => setView('settings')}><Settings size={17} /><span>偏好设置</span></button><div className="privacy-note"><CloudOff size={14} /><span>本地优先 · 数据归你</span></div></div>
-      </aside>
-      {mobileNav && <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
+      </aside>}
+      {primaryTab === 'library' && mobileNav && <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
       <main className="main-content">
+        {primaryTab === 'community' ? <CommunityView posts={communityPosts} quota={uploadQuota} onLike={toggleCommunityLike} onOpenLibrary={() => setPrimaryTab('library')} /> : primaryTab === 'profile' ? <ProfileView profile={mockProfile} quota={uploadQuota} onOpenSync={() => { setPrimaryTab('library'); setView('sync'); }} onOpenSettings={() => { setPrimaryTab('library'); setView('settings'); }} /> : <>
         <section className="page-head"><div><div className="eyebrow">{view === 'online' ? 'LOCAL FIRST · ONLINE EXTRA' : 'YOUR PERSONAL COLLECTION'}</div><h1>{currentTitle}<span className="title-count">{view === 'online' ? online.length : visibleMemes.length}</span></h1><p>{view === 'online' ? '先从本地找，想换个口味时再向在线图库借一张。无需收藏也能直接分享。' : view === 'all' ? '把常用的表达放在手边，复制、发送只需要一瞬间。' : view === 'sync' ? '用一个完整备份，在 Windows 与 Android 之间带走图片和所有元数据。' : '整理好自己的语气，下一次找到它会更快。'}</p></div><div className="page-head-actions">{(view === 'all' || view.startsWith('collection:') || view === 'favorites' || view === 'recent') && <button className={`glass-button ${selecting ? 'selected-mode' : ''}`} onClick={() => { setSelecting((s) => !s); setSelected(new Set()); }}><Check size={16} /> {selecting ? '完成选择' : '批量管理'}</button>}</div></section>
         <div className="search-row"><label className="search-box glass"><Search size={19} /><input id="global-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={view === 'online' ? '搜一张想用的表情，例如：猫猫 开心' : '搜索标题、标签、备注…'} /><kbd>⌘ K</kbd>{search && <button className="clear-search" aria-label="清空搜索" onClick={() => setSearch('')}><X size={15} /></button>}</label><span className="search-tip"><Keyboard size={14} /> 支持多个关键词</span></div>
         {tagFilter && <div className="filter-chip"><Tag size={14} /> #{tagFilter}<button aria-label="移除标签筛选" onClick={() => setTagFilter('')}><X size={13} /></button></div>}
-        {view === 'online' ? <OnlineView items={online} loading={onlineLoading} error={onlineError} onRetry={loadOnline} onUse={useOnline} onSave={saveOnline} /> : view === 'sync' ? <SyncView onImport={() => setImportOpen(true)} onImportFiles={async (files) => { const result = await importImages(files); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; notify(`已导入 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); }} onBackup={() => setBackupOpen(true)} /> : view === 'settings' ? <SettingsView settings={settings} onNotify={notify} /> : view === 'tags' ? <TagsView tags={tags} onSelect={(tag) => { setTagFilter(tag); setView('all'); }} /> : <>
-          {visibleMemes.length ? <div className={`meme-grid ${settings.dense ? 'dense' : ''}`}>{visibleMemes.map((meme) => <MemeCard key={meme.id} meme={meme} active={meme.id === selectedId} selecting={selecting} selected={selected.has(meme.id)} onOpen={() => setEditId(meme.id)} onFavorite={() => updateMeme(meme.id, { favorite: !meme.favorite })} onUse={() => copyMeme(meme)} onSelect={() => setSelected((old) => { const next = new Set(old); next.has(meme.id) ? next.delete(meme.id) : next.add(meme.id); return next; })} />)}</div> : <EmptyState search={search} view={view} onAdd={() => setImportOpen(true)} onOnline={() => setView('online')} />}
+        {view === 'online' ? <OnlineView items={online} loading={onlineLoading} error={onlineError} onRetry={loadOnline} onUse={useOnline} onSave={saveOnline} /> : view === 'sync' ? <SyncView onImport={openImagePicker} onImportFiles={async (files) => { const result = await importImages(files); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; notify(`已导入 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); }} onBackup={() => setBackupOpen(true)} /> : view === 'settings' ? <SettingsView settings={settings} onNotify={notify} /> : view === 'tags' ? <TagsView tags={tags} onSelect={(tag) => { setTagFilter(tag); setView('all'); }} /> : <>
+          {visibleMemes.length ? <div className={`meme-grid ${settings.dense ? 'dense' : ''}`}>{visibleMemes.map((meme) => <MemeCard key={meme.id} meme={meme} active={meme.id === previewId} selecting={selecting} selected={selected.has(meme.id)} onPreview={() => setPreviewId(meme.id)} onManage={() => setEditId(meme.id)} onFavorite={() => updateMeme(meme.id, { favorite: !meme.favorite })} onUse={() => copyMeme(meme)} onSelect={() => setSelected((old) => { const next = new Set(old); next.has(meme.id) ? next.delete(meme.id) : next.add(meme.id); return next; })} />)}</div> : <EmptyState search={search} view={view} onAdd={openImagePicker} onOnline={() => setView('online')} />}
           {selecting && selected.size > 0 && <div className="batch-bar glass"><span>已选择 <strong>{selected.size}</strong> 张</span><button className="danger-button" onClick={deleteSelected}><Trash2 size={16} /> 移除选中</button></div>}
+        </>}
         </>}
       </main>
       {selectedMeme && !editMeme && <button className="detail-scrim" aria-label="关闭详情" onClick={() => setSelectedId(undefined)} />}
     </div>
+    <BottomTabs active={primaryTab} onChange={(tab) => { setPrimaryTab(tab); setMobileNav(false); }} />
+    <input ref={imagePickerRef} className="native-file-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { void importImmediately(event.target.files); }} />
+    {previewMeme && !editMeme && <PreviewModal meme={previewMeme} quota={uploadQuota} onClose={() => setPreviewId(undefined)} onUse={() => copyMeme(previewMeme)} onManage={() => { setPreviewId(undefined); setEditId(previewMeme.id); }} onPublish={() => publishToCommunity(previewMeme)} />}
     {editMeme && <EditModal meme={editMeme} collections={collections} onClose={() => setEditId(undefined)} onNotify={notify} onUse={() => copyMeme(editMeme)} onDelete={async () => { await deleteMemes([editMeme.id]); setEditId(undefined); notify('表情已移除'); }} />}
-    {importOpen && <ImportModal collections={collections} onClose={() => setImportOpen(false)} onNotify={notify} />}
     {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} onNotify={notify} />}
     {collectionOpen && <Modal title="新建收藏夹" onClose={() => setCollectionOpen(false)}><form className="edit-fields" onSubmit={(event) => { event.preventDefault(); void createCollection(); }}><label>收藏夹名称<input autoFocus value={collectionName} onChange={(event) => setCollectionName(event.target.value)} required maxLength={40} /></label><button type="submit" className="primary-button">创建收藏夹</button></form></Modal>}
     {toast && <div className="toast glass"><Check size={16} />{toast}</div>}
   </div>;
 }
+
+function BottomTabs({ active, onChange }: { active: PrimaryTab; onChange: (tab: PrimaryTab) => void }) {
+  return <nav className="bottom-tabs glass" aria-label="主导航">
+    <button className={active === 'library' ? 'active' : ''} onClick={() => onChange('library')}><Grid2X2 size={19} /><span>图片库</span></button>
+    <button className={active === 'community' ? 'active' : ''} onClick={() => onChange('community')}><MessageCircle size={19} /><span>社区</span></button>
+    <button className={active === 'profile' ? 'active' : ''} onClick={() => onChange('profile')}><UserRound size={19} /><span>我的</span></button>
+  </nav>;
+}
+
+function CommunityView({ posts, quota, onLike, onOpenLibrary }: { posts: CommunityPost[]; quota?: UploadQuota; onLike: (postId: string) => void; onOpenLibrary: () => void }) {
+  const remaining = quota?.remaining ?? 3;
+  return <section className="community-view">
+    <header className="community-head"><div><div className="eyebrow">LOCAL MOCK COMMUNITY</div><h1>社区 <span className="title-count">{posts.length}</span></h1><p>先用本地 Mock 走通浏览、点赞和发布入口；不会联网，也不会上传你的图片。</p></div><button className="primary-button" onClick={onOpenLibrary}><Plus size={17} /> 添加图片</button></header>
+    <div className="community-note glass"><Sparkles size={18} /><span><strong>本地演示模式</strong> · 账号、帖子和每日发布额度都在当前设备模拟，后续可直接替换为真实 API。</span><em>今日还可发布 {remaining} / {quota?.limit ?? 3}</em></div>
+    <div className="community-grid">{posts.map((post) => <CommunityCard key={post.id} post={post} onLike={() => onLike(post.id)} />)}</div>
+  </section>;
+}
+
+function CommunityCard({ post, onLike }: { post: CommunityPost; onLike: () => void }) {
+  return <article className="community-card glass"><header><span className="avatar">{post.author.avatar}</span><div><strong>{post.author.name}</strong><small>{post.author.handle} · {relativeTime(post.createdAt)}</small></div>{post.isLocalMock && <span className="mock-badge">本地 Mock</span>}</header><img src={post.imageUrl} alt={post.title} loading="lazy" /><div className="community-card-body"><strong>{post.title}</strong><p>{post.caption}</p>{post.tags.length > 0 && <div className="community-tags">{post.tags.slice(0, 4).map((tag) => <span key={tag}>#{tag}</span>)}</div>}<footer><button className={post.liked ? 'liked' : ''} onClick={onLike} aria-label={`${post.liked ? '取消喜欢' : '喜欢'} ${post.title}`}><Heart size={16} fill={post.liked ? 'currentColor' : 'none'} /> {post.likes}</button><span><MessageCircle size={15} /> 评论稍后接入</span></footer></div></article>;
+}
+
+function ProfileView({ profile, quota, onOpenSync, onOpenSettings }: { profile?: MockProfile; quota?: UploadQuota; onOpenSync: () => void; onOpenSettings: () => void }) {
+  const user = profile ?? { name: '心语用户', handle: '@local_mock', avatar: '心', bio: '正在加载本地 Mock 账号…', following: 0, followers: 0, postCount: 0 };
+  const remaining = quota?.remaining ?? 3;
+  return <section className="profile-view"><div className="profile-card glass"><div className="profile-main"><span className="profile-avatar">{user.avatar}</span><div><div className="eyebrow">LOCAL MOCK ACCOUNT</div><h1>{user.name}</h1><span className="profile-handle">{user.handle}</span><p>{user.bio}</p></div></div><div className="profile-stats"><span><strong>{user.postCount}</strong> 发布</span><span><strong>{user.following}</strong> 关注</span><span><strong>{user.followers}</strong> 获赞</span></div></div><div className="quota-card glass"><div><span className="quota-icon"><Upload size={20} /></span><div><strong>本地模拟发布额度</strong><p>每日 {quota?.limit ?? 3} 张，发布只显示在当前设备的 Mock 社区。</p></div></div><b>{remaining} <small>/ {quota?.limit ?? 3}</small></b></div><div className="profile-actions"><button className="profile-action glass" onClick={onOpenSync}><Archive size={21} /><span><strong>备份与迁移</strong><small>用 .puff.zip 带走你的图片和信息</small></span><ChevronRight size={17} /></button><button className="profile-action glass" onClick={onOpenSettings}><Settings size={21} /><span><strong>偏好设置</strong><small>网格密度、动效和在线补充</small></span><ChevronRight size={17} /></button></div><p className="profile-footnote"><Info size={14} /> 这页暂不需要登录；切换为真实账号服务时，界面仍通过同一个数据层读取资料与额度。</p></section>;
+}
+
+function PreviewModal({ meme, quota, onClose, onUse, onManage, onPublish }: { meme: Meme; quota?: UploadQuota; onClose: () => void; onUse: () => void; onManage: () => void; onPublish: () => void }) {
+  const url = useBlobUrl(meme.blob);
+  const remaining = quota?.remaining ?? 3;
+  return <Modal title={meme.title} subtitle="点击发送；长按图片或点“管理”才会修改它的信息。" onClose={onClose} wide><div className="preview-layout"><div className="preview-image"><img src={url} alt={meme.title} /></div><div className="preview-info"><div className="preview-meta"><span>{meme.mime.replace('image/', '').toUpperCase()}</span><span>{formatBytes(meme.size)}</span>{meme.tags.slice(0, 4).map((tag) => <span key={tag}>#{tag}</span>)}</div>{meme.note && <p>{meme.note}</p>}<div className="preview-actions"><button className="primary-button" onClick={onUse}><Send size={16} /> {isAndroid ? '分享图片' : '复制图片'}</button><button className="glass-button" onClick={onManage}><Pencil size={16} /> 管理</button><button className="glass-button" disabled={!remaining} onClick={onPublish}><Upload size={16} /> {remaining ? `发布到社区（${remaining} 次）` : '今日额度已用完'}</button></div><small>发布仅是本地 Mock：不会上传原图或创建真实账号。</small></div></div></Modal>;
+}
+
+function relativeTime(time: number) { const minutes = Math.max(1, Math.floor((Date.now() - time) / 60000)); return minutes < 60 ? `${minutes} 分钟前` : minutes < 1440 ? `${Math.floor(minutes / 60)} 小时前` : `${Math.floor(minutes / 1440)} 天前`; }
 
 function NavButton({ icon, label, count, active, onClick }: { icon: React.ReactNode; label: string; count?: number; active: boolean; onClick: () => void }) { return <button className={`nav-button ${active ? 'active' : ''}`} onClick={onClick}>{icon}<span>{label}</span>{count !== undefined && <em>{count}</em>}<ChevronRight className="nav-chevron" size={14} /></button>; }
 
@@ -129,7 +201,7 @@ function SettingToggle({ title, description, value, onChange }: { title: string;
 
 function EditModal({ meme, collections, onClose, onNotify, onUse, onDelete }: { meme: Meme; collections: Collection[]; onClose: () => void; onNotify: (message: string) => void; onUse: () => void; onDelete: () => void }) { const [title, setTitle] = useState(meme.title); const [note, setNote] = useState(meme.note); const [tags, setTags] = useState(meme.tags.join('，')); const [collectionId, setCollectionId] = useState(meme.collectionId); const url = useBlobUrl(meme.blob); const save = async () => { await updateMeme(meme.id, { title: title.trim() || '未命名表情', note, tags: tags.split(/[，,\s]+/).map((x) => x.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30), collectionId }); onNotify('表情信息已保存'); onClose(); }; return <Modal title="编辑表情" subtitle="给它一个更容易被找到的语气。" onClose={onClose}><div className="edit-layout"><div className="edit-preview"><img src={url} alt={meme.title} /></div><div className="edit-fields"><label>标题<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></label><label>标签<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="例如：开心 反应 朋友" /></label><label>收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label><div className="edit-actions"><button className="danger-ghost" onClick={onDelete}><Trash2 size={15} /> 移除</button><span /><button className="glass-button" onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" onClick={save}><Check size={16} /> 保存</button></div></div></div></Modal>; }
 
-function ImportModal({ collections, onClose, onNotify }: { collections: Collection[]; onClose: () => void; onNotify: (message: string) => void }) { const input = useRef<HTMLInputElement>(null); const [collectionId, setCollectionId] = useState(''); const [busy, setBusy] = useState(false); const choose = async (files: FileList | null) => { if (!files?.length) return; setBusy(true); try { const result = await importImages([...files], collectionId); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; onNotify(`已导入 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '导入失败'); } finally { setBusy(false); } }; return <Modal title="添加表情" subtitle="图片只会保存在当前设备的本地表情库。" onClose={busy ? () => undefined : onClose}><div className="import-modal"><div className="import-picker" onClick={() => input.current?.click()}><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple hidden onChange={(e) => choose(e.target.files)} /><ImagePlus size={30} /><strong>{busy ? '正在整理图片…' : '点击选择，或把图片拖进来'}</strong><span>支持批量导入，内容相同的图片会自动去重</span></div><label>放入收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div></Modal>; }
+function ImportModal({ collections, onClose, onNotify }: { collections: Collection[]; onClose: () => void; onNotify: (message: string) => void }) { const input = useRef<HTMLInputElement>(null); const [collectionId, setCollectionId] = useState(''); const [busy, setBusy] = useState(false); const choose = async (files: FileList | null) => { if (!files?.length) return; setBusy(true); try { const result = await importImages([...files], collectionId); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; onNotify(`已导入 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '导入失败'); } finally { setBusy(false); } }; return <Modal title="添加图片" subtitle="选中后立即入库；标签和收藏夹都可以之后再整理。" onClose={busy ? () => undefined : onClose}><div className="import-modal"><div className="import-picker" onClick={() => input.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void choose(event.dataTransfer.files); }}><input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple hidden onChange={(e) => choose(e.target.files)} /><ImagePlus size={30} /><strong>{busy ? '正在整理图片…' : '点击选择，或把图片拖进来'}</strong><span>支持批量导入，内容相同的图片会自动去重</span></div><label>可选：同时放入收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">不分类，直接入库</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div></Modal>; }
 
 function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) { const input = useRef<HTMLInputElement>(null); const [busy, setBusy] = useState(false); const [deletions, setDeletions] = useState(true); const [restoreSettings, setRestoreSettings] = useState(false); const create = async () => { setBusy(true); try { const blob = await exportLibrary(); await saveBlob(blob, `xinyu-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`); onNotify('完整备份已生成'); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '备份失败'); } finally { setBusy(false); } }; const restore = async (file: File) => { setBusy(true); try { const backup = await readBackup(file); const result = await mergeBackup(backup, deletions, restoreSettings); onNotify(`恢复完成：新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); } finally { setBusy(false); } }; return <Modal title="导入与同步" subtitle="心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。" onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>原图和所有标签、备注、收藏夹都会写进一个 ZIP。</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> 导出</button></div><div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效和在线补充开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>; }
 

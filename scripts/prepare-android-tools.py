@@ -1,6 +1,7 @@
 """Download Google's command-line tools into this project's .tools directory."""
 import hashlib
 import pathlib
+import platform
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -9,7 +10,10 @@ root = pathlib.Path(__file__).resolve().parent.parent / '.tools'
 root.mkdir(exist_ok=True)
 xml = ET.fromstring(urllib.request.urlopen('https://dl.google.com/android/repository/repository2-1.xml', timeout=20).read())
 pkg = next(node for node in xml if node.attrib.get('path') == 'cmdline-tools;latest')
-archive = next(node for node in pkg.findall('.//archive') if node.findtext('host-os') == 'windows')
+host = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macosx'}.get(platform.system())
+if not host:
+    raise RuntimeError(f'Unsupported host operating system: {platform.system()}')
+archive = next(node for node in pkg.findall('.//archive') if node.findtext('host-os') == host)
 complete = archive.find('complete')
 url = complete.findtext('url')
 expected = complete.findtext('checksum')
