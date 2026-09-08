@@ -1,0 +1,56 @@
+{
+  "name": "xinyu-meme-library",
+  "productName": "心语表情库",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows 与 Android 共用的离线个人表情库 · 心语",
+  "author": "Xinyu Meme Library contributors",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "desktop": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --win dir",
+    "desktop:dist": "npm run build && electron-builder --win portable",
+    "android:sync": "npm run build && cap sync android",
+    "android:build": "npm run android:sync && node scripts/build-android.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/filesystem": "^8.0.0",
+    "@capacitor/share": "^8.0.0",
+    "dexie": "^4.0.11",
+    "dexie-react-hooks": "^4.2.0",
+    "fflate": "^0.8.2",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "fake-indexeddb": "^6.2.2",
+    "typescript": "~5.9.2",
+    "vite": "^6.4.0",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "com.puff.meme",
+    "electronDist": "node_modules/electron/dist",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "electron/**/*", "package.json", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+    "win": { "target": "portable", "executableName": "xinyu-meme-library", "signAndEditExecutable": false },
+    "portable": { "artifactName": "Xinyu-Meme-Library-${version}-Windows.exe" }
+  }
+}

@@ -1,0 +1,31 @@
+node_modules/
+dist/
+release/
+release-*/
+.tools/
+.gradle/
+android/.gradle/
+android/local.properties
+android/**/build/
+android/app/src/main/assets/public/
+test-results/
+playwright-report/
+*.log
+.env*
+!.env.example
+
+# Local verification and generated metadata
+verification/
+*.tsbuildinfo
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Android/Gradle local state
+android/.cxx/
+android/.idea/
+android/.kotlin/

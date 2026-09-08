@@ -1,0 +1,113 @@
+import Dexie, { type EntityTable } from 'dexie';
+import type { Collection, Meme, Settings, Tombstone } from '../types';
+import { samples } from './samples';
+
+export class LibraryDB extends Dexie {
+  memes!: EntityTable<Meme, 'id'>;
+  collections!: EntityTable<Collection, 'id'>;
+  tombstones!: EntityTable<Tombstone, 'id'>;
+  settings!: EntityTable<Settings, 'id'>;
+  constructor(name = 'puff-library') {
+    super(name);
+    this.version(1).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id', tombstones: 'id', settings: 'id' });
+    // v1 ordered collections by an unindexed field, which throws while mounting the UI.
+    this.version(2).stores({ collections: 'id, updatedAt' });
+  }
+}
+export const db = new LibraryDB();
+export const MAX_IMAGE_SIZE = 32 * 1024 * 1024;
+export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: false, onlineSupplement: false };
+export const defaultCollections: Collection[] = [
+  { id: 'daily', name: '日常营业', color: '#96af91', updatedAt: 1 },
+  { id: 'cute', name: '可爱即正义', color: '#dda898', updatedAt: 1 },
+  { id: 'work', name: '打工人的精神状态', color: '#aaa2c1', updatedAt: 1 },
+];
+
+export function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+export async function sha256(blob: Blob) {
+  const hash = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+  return Array.from(new Uint8Array(hash), (n) => n.toString(16).padStart(2, '0')).join('');
+}
+export function detectMime(bytes: Uint8Array): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (String.fromCharCode(...bytes.slice(0, 6)).match(/^GIF8[79]a$/)) return 'image/gif';
+  if (String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+  if (String.fromCharCode(...bytes.slice(4, 12)).match(/^ftypavif/)) return 'image/avif';
+  const text = new TextDecoder().decode(bytes.slice(0, 256)).trimStart().toLowerCase();
+  if (text.startsWith('<svg') || text.startsWith('<?xml') && text.includes('<svg')) return 'image/svg+xml';
+  throw new Error('仅支持有效的 PNG、JPG、GIF、WebP、AVIF 和 SVG 图片');
+}
+export async function imageDimensions(blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    if (!img.naturalWidth || img.naturalWidth * img.naturalHeight > 40_000_000) throw new Error('图片尺寸过大，最多支持 4000 万像素');
+    return { width: img.naturalWidth, height: img.naturalHeight };
+  } catch (error) { throw new Error(error instanceof Error && error.message.includes('4000') ? error.message : '图片损坏或设备不支持此格式'); }
+  finally { URL.revokeObjectURL(url); }
+}
+export async function prepareImage(file: Blob, title: string, collectionId = '', source = '本地导入'): Promise<Meme> {
+  if (file.size > MAX_IMAGE_SIZE || !file.size) throw new Error('单张图片必须在 0～32 MB 之间');
+  const mime = detectMime(new Uint8Array(await file.slice(0, 256).arrayBuffer()));
+  const blob = new Blob([file], { type: mime });
+  const [id, dimensions] = await Promise.all([sha256(blob), imageDimensions(blob)]);
+  const now = Date.now();
+  return { id, blob, ...dimensions, title: title.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名表情', tags: [], note: '', collectionId, favorite: false, createdAt: now, updatedAt: now, lastUsedAt: 0, useCount: 0, mime, size: blob.size, source };
+}
+export async function importImages(files: File[], collectionId = '') {
+  let added = 0, skipped = 0;
+  const errors: string[] = [];
+  for (const file of files) {
+    try {
+      const meme = await prepareImage(file, file.name, collectionId);
+      await db.transaction('rw', db.memes, db.tombstones, async () => {
+        if (await db.memes.get(meme.id)) { skipped++; return; }
+        await db.memes.add(meme);
+        await db.tombstones.delete(meme.id);
+        added++;
+      });
+    } catch (error) { errors.push(`${file.name}: ${error instanceof Error ? error.message : '导入失败'}`); }
+  }
+  return { added, skipped, errors };
+}
+export async function updateMeme(id: string, changes: Partial<Pick<Meme, 'title' | 'tags' | 'note' | 'collectionId' | 'favorite'>>) {
+  await db.memes.update(id, { ...changes, updatedAt: Date.now() });
+}
+export async function markUsed(id: string) {
+  await db.memes.where('id').equals(id).modify((m) => { m.lastUsedAt = Date.now(); m.useCount++; });
+}
+export async function deleteMemes(ids: string[]) {
+  await db.transaction('rw', db.memes, db.tombstones, async () => {
+    await db.tombstones.bulkPut(ids.map((id) => ({ id, deletedAt: Date.now() })));
+    await db.memes.bulkDelete(ids);
+  });
+}
+export function matchesSearch(meme: Pick<Meme, 'title' | 'tags' | 'note'>, search: string) {
+  const haystack = `${meme.title} ${meme.tags.join(' ')} ${meme.note}`.normalize('NFKC').toLocaleLowerCase();
+  return search.normalize('NFKC').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean).every((term) => haystack.includes(term.replace(/^#/, '')));
+}
+let seedPromise: Promise<void> | undefined;
+export function initializeLibrary() {
+  return seedPromise ??= (async () => {
+    if (await db.settings.get('preferences')) return;
+    const memes: Meme[] = [];
+    for (const [index, sample] of samples.entries()) {
+      const item = await prepareImage(new Blob([sample.svg], { type: 'image/svg+xml' }), sample.title, sample.collectionId, '心语表情库原创示例');
+      memes.push({ ...item, tags: sample.tags, favorite: !!sample.favorite, createdAt: Date.now() - index * 3600000, note: '心语表情库内置的原创示例表情，可以自由使用，也可以删除后导入自己的收藏。' });
+    }
+    await db.transaction('rw', db.memes, db.collections, db.settings, async () => {
+      if (await db.settings.get('preferences')) return;
+      await db.collections.bulkPut(defaultCollections);
+      await db.memes.bulkPut(memes);
+      await db.settings.put(defaultSettings);
+    });
+    navigator.storage?.persist?.().catch(() => undefined);
+  })().catch((error) => { seedPromise = undefined; throw error; });
+}

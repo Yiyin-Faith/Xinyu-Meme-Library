@@ -1,0 +1,8 @@
+[
+  {"file":"soft-ok.svg","title":"收到，稳稳的","tags":["好的","日常","确认"],"collectionId":"daily","favorite":true},
+  {"file":"cat-cute.svg","title":"猫猫探头","tags":["可爱","猫猫","撒娇"],"collectionId":"cute","favorite":true},
+  {"file":"work-coffee.svg","title":"先喝口咖啡","tags":["打工","摸鱼","日常"],"collectionId":"work"},
+  {"file":"wow.svg","title":"这也太震撼了","tags":["震惊","反应"],"collectionId":"daily"},
+  {"file":"sorry.svg","title":"对不起嘛","tags":["道歉","可爱"],"collectionId":"cute"},
+  {"file":"done.svg","title":"今天也完成了","tags":["打工","开心","完成"],"collectionId":"work","favorite":true}
+]
