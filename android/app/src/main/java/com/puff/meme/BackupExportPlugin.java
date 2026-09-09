@@ -135,7 +135,11 @@ public class BackupExportPlugin extends Plugin {
             stream.write(Base64.decode(data, Base64.DEFAULT));
             call.resolve();
         } catch (Exception error) {
-            closeWriter(writerId);
+            try {
+                closeWriter(writerId);
+            } catch (IOException ignored) {
+                // The original write error is the useful one to surface.
+            }
             call.reject("写入备份数据失败：" + message(error), error);
         }
     }
