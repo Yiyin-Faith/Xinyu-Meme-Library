@@ -4,4 +4,6 @@
     <string name="title_activity_main">心语表情库</string>
     <string name="package_name">com.puff.meme</string>
     <string name="custom_url_scheme">com.puff.meme</string>
+    <string name="accessibility_recommendation_label">心语输入表情推荐</string>
+    <string name="accessibility_recommendation_description">仅在开启“输入关键词自动推荐表情”后，本机匹配当前输入框文字与自己的表情标签；输入内容不会保存或上传。</string>
 </resources>

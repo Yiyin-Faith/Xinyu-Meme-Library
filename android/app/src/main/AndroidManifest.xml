@@ -42,6 +42,20 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-enabled movable shortcut for opening the private local meme library above other applications." />
         </service>
+
+        <service
+            android:name=".MemeRecommendationAccessibilityService"
+            android:description="@string/accessibility_recommendation_description"
+            android:exported="true"
+            android:label="@string/accessibility_recommendation_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/meme_recommendation_accessibility" />
+        </service>
     </application>
 
     <!-- Permissions -->

@@ -8,6 +8,7 @@ export const isDesktop = !!window.puffDesktop;
 export const platformName = isDesktop ? 'Windows 客户端' : isAndroid ? 'Android 客户端' : '浏览器体验版';
 
 export type AndroidFloatingWindowStatus = { granted: boolean; enabled: boolean; opacity: number };
+export type AndroidAccessibilityRecommendationStatus = { granted: boolean; enabled: boolean; mode: 'exact' | 'contains' };
 interface NativeFloatingWindow extends Plugin {
   getStatus(): Promise<AndroidFloatingWindowStatus>;
   requestPermission(options: { enableAfterGrant: boolean }): Promise<AndroidFloatingWindowStatus>;
@@ -15,6 +16,15 @@ interface NativeFloatingWindow extends Plugin {
   setOpacity(options: { opacity: number }): Promise<AndroidFloatingWindowStatus>;
 }
 const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
+
+interface NativeAccessibilityRecommendation extends Plugin {
+  getStatus(): Promise<AndroidAccessibilityRecommendationStatus>;
+  requestPermission(options: { enableAfterGrant: boolean }): Promise<AndroidAccessibilityRecommendationStatus>;
+  setEnabled(options: { enabled: boolean }): Promise<AndroidAccessibilityRecommendationStatus>;
+  setMatchMode(options: { mode: 'exact' | 'contains' }): Promise<AndroidAccessibilityRecommendationStatus>;
+  setTagIndex(options: { tags: string[] }): Promise<void>;
+}
+const AccessibilityRecommendation = registerPlugin<NativeAccessibilityRecommendation>('AccessibilityRecommendation');
 
 export async function getAndroidFloatingWindowStatus(): Promise<AndroidFloatingWindowStatus> {
   if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
@@ -34,6 +44,32 @@ export async function setAndroidFloatingWindow(enabled: boolean): Promise<Androi
 export async function setAndroidFloatingWindowOpacity(opacity: number): Promise<AndroidFloatingWindowStatus> {
   if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
   return FloatingWindow.setOpacity({ opacity: Math.max(0.3, Math.min(1, opacity)) });
+}
+
+export async function getAndroidAccessibilityRecommendationStatus(): Promise<AndroidAccessibilityRecommendationStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, mode: 'exact' };
+  return AccessibilityRecommendation.getStatus();
+}
+
+export async function requestAndroidAccessibilityRecommendationPermission(enableAfterGrant = false): Promise<AndroidAccessibilityRecommendationStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, mode: 'exact' };
+  return AccessibilityRecommendation.requestPermission({ enableAfterGrant });
+}
+
+export async function setAndroidAccessibilityRecommendationEnabled(enabled: boolean): Promise<AndroidAccessibilityRecommendationStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, mode: 'exact' };
+  return AccessibilityRecommendation.setEnabled({ enabled });
+}
+
+export async function setAndroidAccessibilityRecommendationMode(mode: 'exact' | 'contains'): Promise<AndroidAccessibilityRecommendationStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, mode };
+  return AccessibilityRecommendation.setMatchMode({ mode });
+}
+
+/** Existing library tags are copied only to Android process memory, never persisted. */
+export async function setAndroidAccessibilityRecommendationTags(tags: string[]): Promise<void> {
+  if (!isAndroid) return;
+  await AccessibilityRecommendation.setTagIndex({ tags });
 }
 
 export async function setAlwaysOnTop(enabled: boolean): Promise<boolean> {
