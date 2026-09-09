@@ -39,7 +39,7 @@ docs/                 使用说明和 GitHub 协作说明
 ```powershell
 npm install
 npm run desktop:pack       # 生成 release/PC/win-unpacked/，用于 Windows 测试
-npm run desktop:dist       # 生成 Windows 安装包
+npm run desktop:dist       # 生成可选择安装目录的 Windows 安装包
 npm test                   # 运行单元测试
 node scripts/verify-desktop.mjs
 ```
