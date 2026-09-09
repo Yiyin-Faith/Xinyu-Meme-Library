@@ -16,7 +16,7 @@ import { isAndroid, isDesktop, platformName, requestAndroidFloatingWindowPermiss
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.4.2';
+const CURRENT_VERSION = '0.4.3';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 function App() {
@@ -122,6 +122,7 @@ function App() {
     <div className={`layout ${primaryTab === 'library' ? '' : 'single-column'}`}>
       {primaryTab === 'library' && <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
         <div className="sidebar-mobile-head"><strong>心语表情库</strong><button className="icon-button" aria-label="关闭导航" onClick={() => setMobileNav(false)}><X size={19} /></button></div>
+        <div className="sidebar-scroll">
         <div className="nav-section"><span className="nav-label">我的表情</span>
           <NavButton icon={<Grid2X2 size={17} />} label="全部表情" count={memes.length} active={view === 'all'} onClick={() => { setView('all'); setMobileNav(false); }} />
           <NavButton icon={<Heart size={17} />} label="喜欢的" count={memes.filter((m) => m.favorite).length} active={view === 'favorites'} onClick={() => { setView('favorites'); setMobileNav(false); }} />
@@ -129,7 +130,8 @@ function App() {
         </div>
         <div className="nav-section collections"><div className="nav-label-row"><span className="nav-label">收藏夹</span><button className="mini-add" aria-label="新建收藏夹" onClick={addCollection}><Plus size={14} /></button></div>{collections.map((collection) => <NavButton key={collection.id} icon={<span className="collection-dot" style={{ background: collection.color }} />} label={collection.name} count={memes.filter((m) => m.collectionId === collection.id).length} active={view === `collection:${collection.id}`} onClick={() => { setView(`collection:${collection.id}`); setMobileNav(false); }} />)}<button className="add-collection" onClick={addCollection}><FolderPlus size={15} /> 新建收藏夹</button></div>
         <div className="nav-section sidebar-tools"><span className="nav-label">探索与工具</span><NavButton icon={<Sparkles size={17} />} label="在线补充" active={view === 'online'} onClick={() => { setView('online'); setMobileNav(false); }} /><NavButton icon={<Tag size={17} />} label="标签管理" count={tags.length} active={view === 'tags'} onClick={() => { setView('tags'); setMobileNav(false); }} /><NavButton icon={<Archive size={17} />} label="导入与同步" active={view === 'sync'} onClick={() => { setView('sync'); setMobileNav(false); }} /></div>
-        <div className="sidebar-bottom"><button className="nav-button" onClick={() => setView('settings')}><Settings size={17} /><span>偏好设置</span></button><div className="privacy-note"><CloudOff size={14} /><span>本地优先 · 数据归你</span></div></div>
+        </div>
+        <div className="sidebar-bottom"><button className="nav-button" onClick={() => { setView('settings'); setMobileNav(false); }}><Settings size={17} /><span>偏好设置</span></button><div className="privacy-note"><CloudOff size={14} /><span>本地优先 · 数据归你</span></div></div>
       </aside>}
       {primaryTab === 'library' && mobileNav && <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
       <main className="main-content">
@@ -242,6 +244,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.4.3</strong><ul><li>修复手机侧边导航中设置被底栏遮挡的问题，长列表可独立滚动。</li><li>改进 Android 原生备份导出与悬浮窗行为。</li><li>Windows 程序补齐图标、产品版本信息及文件签名。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 备份改为先逐张写入外部持久目录，再由原生层流式生成 ZIP；压缩失败时原始备份仍会保留。</li><li>新增 Android 真正的系统悬浮窗：会先请求“显示在其他应用上层”权限，再显示可拖动入口。</li><li>修复手机侧栏过长时无法滑动的问题。</li><li>Android 发布包改为固定签名，后续版本可保持覆盖安装；构建缺少固定签名时不再生成临时 APK。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.1</strong><ul><li>完整备份导出会显示读取、打包和保存状态，并保留完成提示。</li><li>新增 Windows 悬浮窗模式，让窗口可保持在最前。</li><li>补全 v0.1.0 ～ v0.3.0 的历史更新记录。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>设置页加入本地更新检查和更新日志入口。</li><li>整理 Windows 与 Android 的 0.4.0 发布版本。</li></ul></section>

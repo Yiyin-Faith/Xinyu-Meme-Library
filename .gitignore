@@ -34,5 +34,7 @@ android/.kotlin/
 *.jks
 *.keystore
 *.p12
+*.pfx
+.codex-remote-attachments/
 android/signing.properties
 android/signing.local.properties

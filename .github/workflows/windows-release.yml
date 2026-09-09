@@ -1,0 +1,50 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Restore persistent Windows signing key
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD) { throw 'Configure Windows signing secrets.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'xinyu-windows-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          "WIN_CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "WIN_CSC_KEY_PASSWORD=$env:WINDOWS_PFX_PASSWORD" >> $env:GITHUB_ENV
+      - name: Build signed application and installer
+        run: npm run desktop:release
+      - name: Verify signed artifacts
+        shell: pwsh
+        run: ./scripts/verify-windows-signatures.ps1
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xinyu-Meme-Library-Windows-Installer
+          path: release/PC/Xinyu-Meme-Library-*-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove private signing material
+        if: always()
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'xinyu-windows-signing.pfx'
+          if (Test-Path -LiteralPath $pfx) { Remove-Item -LiteralPath $pfx -Force }

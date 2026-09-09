@@ -1,7 +1,7 @@
 {
   "name": "xinyu-meme-library",
   "productName": "心语表情库",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "Windows 与 Android 共用的离线个人表情库 · 心语",
   "author": "Xinyu Meme Library contributors",
@@ -13,6 +13,7 @@
     "desktop": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --win dir",
     "desktop:dist": "npm run build && electron-builder --win nsis --publish never",
+    "desktop:release": "npm run build && electron-builder --win nsis --publish never -c.forceCodeSigning=true",
     "android:sync": "npm run build && cap sync android",
     "android:debug": "npm run android:sync && node scripts/build-android.mjs --debug",
     "android:build": "npm run android:sync && node scripts/build-android.mjs",
@@ -51,7 +52,7 @@
     "electronDist": "node_modules/electron/dist",
     "directories": { "output": "release/PC" },
     "files": ["dist/**/*", "electron/**/*", "package.json", "LICENSE", "THIRD_PARTY_NOTICES.md", "!node_modules/**/*"],
-    "win": { "target": "nsis", "icon": "electron/icon.ico", "executableName": "xinyu-meme-library", "signAndEditExecutable": false },
+    "win": { "target": "nsis", "icon": "electron/icon.ico", "executableName": "xinyu-meme-library", "signtoolOptions": { "signingHashAlgorithms": ["sha256"] } },
     "nsis": { "artifactName": "Xinyu-Meme-Library-${version}-Setup.exe", "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false }
   }
 }
