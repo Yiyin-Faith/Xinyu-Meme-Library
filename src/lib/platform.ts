@@ -7,27 +7,33 @@ export const isAndroid = Capacitor.getPlatform() === 'android';
 export const isDesktop = !!window.puffDesktop;
 export const platformName = isDesktop ? 'Windows 客户端' : isAndroid ? 'Android 客户端' : '浏览器体验版';
 
-export type AndroidFloatingWindowStatus = { granted: boolean; enabled: boolean };
+export type AndroidFloatingWindowStatus = { granted: boolean; enabled: boolean; opacity: number };
 interface NativeFloatingWindow extends Plugin {
   getStatus(): Promise<AndroidFloatingWindowStatus>;
-  requestPermission(): Promise<AndroidFloatingWindowStatus>;
+  requestPermission(options: { enableAfterGrant: boolean }): Promise<AndroidFloatingWindowStatus>;
   setEnabled(options: { enabled: boolean }): Promise<AndroidFloatingWindowStatus>;
+  setOpacity(options: { opacity: number }): Promise<AndroidFloatingWindowStatus>;
 }
 const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
 
 export async function getAndroidFloatingWindowStatus(): Promise<AndroidFloatingWindowStatus> {
-  if (!isAndroid) return { granted: false, enabled: false };
+  if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
   return FloatingWindow.getStatus();
 }
 
-export async function requestAndroidFloatingWindowPermission(): Promise<AndroidFloatingWindowStatus> {
-  if (!isAndroid) return { granted: false, enabled: false };
-  return FloatingWindow.requestPermission();
+export async function requestAndroidFloatingWindowPermission(enableAfterGrant = false): Promise<AndroidFloatingWindowStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
+  return FloatingWindow.requestPermission({ enableAfterGrant });
 }
 
 export async function setAndroidFloatingWindow(enabled: boolean): Promise<AndroidFloatingWindowStatus> {
-  if (!isAndroid) return { granted: false, enabled: false };
+  if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
   return FloatingWindow.setEnabled({ enabled });
+}
+
+export async function setAndroidFloatingWindowOpacity(opacity: number): Promise<AndroidFloatingWindowStatus> {
+  if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
+  return FloatingWindow.setOpacity({ opacity: Math.max(0.3, Math.min(1, opacity)) });
 }
 
 export async function setAlwaysOnTop(enabled: boolean): Promise<boolean> {
@@ -42,7 +48,10 @@ async function base64(blob: Blob): Promise<string> {
 export async function saveBlob(blob: Blob, name: string): Promise<boolean> {
   if (window.puffDesktop) return window.puffDesktop.saveFile(Array.from(new Uint8Array(await blob.arrayBuffer())), safeFilename(name));
   if (isAndroid) {
-    const result = await Filesystem.writeFile({ path: `puff/${safeFilename(name)}`, data: await base64(blob), directory: Directory.Cache, recursive: true });
+    // Directory.Data is the app's internal files directory on Android. It is
+    // intentionally not a public album and FileProvider only exposes this
+    // narrow xinyu-share child for the duration of a system share.
+    const result = await Filesystem.writeFile({ path: `xinyu-share/${safeFilename(name)}`, data: await base64(blob), directory: Directory.Data, recursive: true });
     await Share.share({ title: name, files: [result.uri], dialogTitle: '保存或发送文件' });
     return true;
   }
@@ -74,7 +83,7 @@ export async function useImage(meme: Pick<Meme, 'blob' | 'mime' | 'title'>, forc
   const name = `${safeFilename(meme.title)}.${extension(meme.mime)}`;
   if (isAndroid) {
     const shareBlob = meme.mime === 'image/svg+xml' ? await pngBlob(meme.blob) : meme.blob;
-    const result = await Filesystem.writeFile({ path: `puff/share-${Date.now()}.${extension(shareBlob.type)}`, data: await base64(shareBlob), directory: Directory.Cache, recursive: true });
+    const result = await Filesystem.writeFile({ path: `xinyu-share/share-${Date.now()}.${extension(shareBlob.type)}`, data: await base64(shareBlob), directory: Directory.Data, recursive: true });
     await Share.share({ files: [result.uri], title: meme.title, dialogTitle: '发送这个表情' });
     return '已打开系统分享';
   }

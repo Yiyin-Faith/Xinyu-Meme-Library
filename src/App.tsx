@@ -12,7 +12,7 @@ import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, i
 import { exportLibrary, mergeBackup, readBackup, type ExportProgress } from './lib/backup';
 import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
 import { fetchOnlineImage, searchOnline } from './lib/online';
-import { isAndroid, isDesktop, platformName, requestAndroidFloatingWindowPermission, saveBlob, setAndroidFloatingWindow, setAlwaysOnTop, useImage } from './lib/platform';
+import { getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidFloatingWindowPermission, saveBlob, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
@@ -54,16 +54,36 @@ function App() {
   useEffect(() => { if (window.puffDesktop) return window.puffDesktop.onQuickOpen(() => document.querySelector<HTMLInputElement>('#global-search')?.focus()); }, []);
   useEffect(() => { if (!isDesktop) return; void setAlwaysOnTop(settings.floatingWindow).catch(() => undefined); }, [settings.floatingWindow]);
   useEffect(() => {
-    if (!isAndroid || !settings.floatingWindow) return;
-    void setAndroidFloatingWindow(true).then((status) => {
-      if (status.enabled) return;
+    if (!ready || !isAndroid) return;
+    let disposed = false;
+    const disablePreference = (message: string) => {
+      if (disposed) return;
       void db.settings.put({ ...settings, floatingWindow: false });
-      notify(status.granted ? '悬浮窗未能显示，已自动关闭开关' : '悬浮窗权限已关闭，已自动关闭开关');
-    }).catch(() => {
-      void db.settings.put({ ...settings, floatingWindow: false });
-      notify('悬浮窗未能恢复，已自动关闭开关');
-    });
-  }, [settings.id, settings.floatingWindow, notify]);
+      notify(message);
+    };
+    const syncFloatingWindow = async () => {
+      try {
+        const current = await getAndroidFloatingWindowStatus();
+        if (!settings.floatingWindow) {
+          if (current.enabled) await setAndroidFloatingWindow(false);
+          return;
+        }
+        if (!current.granted) {
+          disablePreference('悬浮窗权限已关闭，已自动关闭开关');
+          return;
+        }
+        if (current.enabled) return;
+        const started = await setAndroidFloatingWindow(true);
+        if (!started.enabled) disablePreference('悬浮窗未能显示，已自动关闭开关');
+      } catch {
+        disablePreference('悬浮窗未能恢复，已自动关闭开关');
+      }
+    };
+    void syncFloatingWindow();
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') void syncFloatingWindow(); };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => { disposed = true; document.removeEventListener('visibilitychange', onVisibilityChange); };
+  }, [ready, settings.id, settings.floatingWindow, notify]);
 
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
   const visibleMemes = useMemo(() => {
@@ -211,6 +231,13 @@ function TagShortcuts({ tags, activeTag, onSelect }: { tags: [string, number][];
 }
 
 function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; onNotify: (message: string) => void }) {
+  const [floatingOpacity, setFloatingOpacity] = useState(0.82);
+  useEffect(() => {
+    if (!isAndroid) return;
+    let disposed = false;
+    void getAndroidFloatingWindowStatus().then((status) => { if (!disposed) setFloatingOpacity(status.opacity); }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, []);
   const set = async (key: Exclude<keyof PreferenceSettings, 'id'>, value: boolean) => {
     try {
       if (key === 'floatingWindow') {
@@ -219,8 +246,13 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
           if (enabled !== value) throw new Error('窗口置顶状态没有生效');
         } else if (isAndroid) {
           if (value) {
-            const permission = await requestAndroidFloatingWindowPermission();
+            const permission = await requestAndroidFloatingWindowPermission(true);
             if (!permission.granted) { onNotify('未获得“显示在其他应用上层”权限，悬浮窗没有开启'); return; }
+            if (permission.enabled) {
+              await db.settings.put({ ...settings, [key]: value });
+              onNotify('悬浮窗已开启：可拖动，点按回到图片库');
+              return;
+            }
           }
           const status = await setAndroidFloatingWindow(value);
           if (status.enabled !== value) throw new Error(value ? '悬浮按钮没有显示，请检查系统悬浮窗权限' : '悬浮窗没有关闭');
@@ -230,6 +262,10 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       onNotify(key === 'floatingWindow' ? value ? isAndroid ? '悬浮窗已开启：可拖动，点按回到图片库' : '悬浮窗模式已开启，窗口会保持在最前' : '悬浮窗模式已关闭' : '偏好设置已更新');
     } catch (error) { onNotify(error instanceof Error ? error.message : '偏好设置更新失败'); }
   };
+  const changeFloatingOpacity = (opacity: number) => {
+    setFloatingOpacity(opacity);
+    void setAndroidFloatingWindowOpacity(opacity).catch(() => onNotify('悬浮窗透明度保存失败'));
+  };
   return <div className="settings-view">
     <div className="settings-card glass">
       <div className="setting-title"><div className="setting-icon"><Zap size={18} /></div><div><h2>使用偏好</h2><p>让心语更贴近你的节奏。</p></div></div>
@@ -237,6 +273,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} />
       <SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} />
       <SettingToggle title="悬浮窗模式" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : isAndroid ? '显示一个可拖动的心语按钮；点按回到图片库，需要系统“显示在其他应用上层”权限。' : '仅 Windows 和 Android 客户端可用。'} value={settings.floatingWindow} disabled={!isDesktop && !isAndroid} onChange={(value) => set('floatingWindow', value)} />
+      {isAndroid && <label className="floating-opacity"><span><strong>悬浮窗透明度</strong><small>拖动后立即应用；较低透明度可减少对其他应用的遮挡。</small></span><div><input type="range" min="0.3" max="1" step="0.05" value={floatingOpacity} aria-label="悬浮窗透明度" onChange={(event) => changeFloatingOpacity(Number(event.target.value))} /><output>{Math.round(floatingOpacity * 100)}%</output></div></label>}
     </div>
     <div className="settings-card glass">
       <div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看功能变化。</p></div></div>
@@ -244,7 +281,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
-          <section className="changelog-entry"><strong>v0.4.3</strong><ul><li>修复手机侧边导航中设置被底栏遮挡的问题，长列表可独立滚动。</li><li>改进 Android 原生备份导出与悬浮窗行为。</li><li>Windows 程序补齐图标、产品版本信息及文件签名。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.4.3</strong><ul><li>修复手机侧边导航中设置被底栏遮挡的问题，长列表可独立滚动。</li><li>Android 图片库与分享临时文件保持在应用私有范围，升级时会为旧应用专属目录补上媒体隔离标记。</li><li>补全 Android 悬浮窗的权限恢复、后台保持、位置记忆和透明度调节。</li><li>Windows 程序补齐图标、产品版本信息及文件签名。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 备份改为先逐张写入外部持久目录，再由原生层流式生成 ZIP；压缩失败时原始备份仍会保留。</li><li>新增 Android 真正的系统悬浮窗：会先请求“显示在其他应用上层”权限，再显示可拖动入口。</li><li>修复手机侧栏过长时无法滑动的问题。</li><li>Android 发布包改为固定签名，后续版本可保持覆盖安装；构建缺少固定签名时不再生成临时 APK。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.1</strong><ul><li>完整备份导出会显示读取、打包和保存状态，并保留完成提示。</li><li>新增 Windows 悬浮窗模式，让窗口可保持在最前。</li><li>补全 v0.1.0 ～ v0.3.0 的历史更新记录。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>设置页加入本地更新检查和更新日志入口。</li><li>整理 Windows 与 Android 的 0.4.0 发布版本。</li></ul></section>

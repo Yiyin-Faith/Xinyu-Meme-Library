@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <!--
+      Sharing is the only Android code path that materialises a meme as a file.
+      Keep that temporary copy inside the app's internal files directory instead
+      of exposing all of shared external storage through this provider.
+    -->
+    <files-path name="xinyu_share" path="xinyu-share/" />
 </paths>

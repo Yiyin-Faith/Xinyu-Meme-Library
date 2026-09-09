@@ -7,12 +7,15 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -21,33 +24,120 @@ import android.view.WindowManager;
 import android.widget.TextView;
 
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 
 /** A small draggable shortcut shown above other Android applications. */
 public class FloatingWindowService extends Service {
     private static final String CHANNEL_ID = "xinyu-floating-window";
     private static final int NOTIFICATION_ID = 4042;
+    private static final String PREFERENCES = "xinyu-floating-window";
+    private static final String PREFERENCE_ENABLED = "enabled";
+    private static final String PREFERENCE_ENABLE_AFTER_GRANT = "enable-after-grant";
+    private static final String PREFERENCE_OPACITY = "opacity";
+    private static final String PREFERENCE_X = "position-x";
+    private static final String PREFERENCE_Y = "position-y";
+    private static final float DEFAULT_OPACITY = 0.82f;
+    private static final float MIN_OPACITY = 0.30f;
     private static volatile boolean overlayShowing = false;
+    private static volatile FloatingWindowService activeService;
 
     private WindowManager windowManager;
     private View bubble;
     private WindowManager.LayoutParams layoutParams;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable permissionWatcher = new Runnable() {
+        @Override
+        public void run() {
+            if (!Settings.canDrawOverlays(FloatingWindowService.this)) {
+                // Android has no listener for a user revoking this special
+                // permission. Poll while the foreground service is active so
+                // the button disappears and the saved native state is honest.
+                setEnabledPreference(FloatingWindowService.this, false);
+                clearEnableAfterGrantPending(FloatingWindowService.this);
+                stopSelf();
+                return;
+            }
+            if (bubble != null) mainHandler.postDelayed(this, 1500L);
+        }
+    };
 
     public static boolean isOverlayShowing() {
         return overlayShowing;
     }
 
+    public static void start(Context context) {
+        Context appContext = context.getApplicationContext();
+        ContextCompat.startForegroundService(appContext, new Intent(appContext, FloatingWindowService.class));
+    }
+
+    public static void stop(Context context) {
+        Context appContext = context.getApplicationContext();
+        appContext.stopService(new Intent(appContext, FloatingWindowService.class));
+    }
+
+    public static void setEnabledPreference(Context context, boolean enabled) {
+        preferences(context).edit().putBoolean(PREFERENCE_ENABLED, enabled).apply();
+    }
+
+    public static boolean isEnabledPreference(Context context) {
+        return preferences(context).getBoolean(PREFERENCE_ENABLED, false);
+    }
+
+    public static void setEnableAfterGrantPending(Context context, boolean pending) {
+        preferences(context).edit().putBoolean(PREFERENCE_ENABLE_AFTER_GRANT, pending).apply();
+    }
+
+    public static boolean isEnableAfterGrantPending(Context context) {
+        return preferences(context).getBoolean(PREFERENCE_ENABLE_AFTER_GRANT, false);
+    }
+
+    public static void clearEnableAfterGrantPending(Context context) {
+        setEnableAfterGrantPending(context, false);
+    }
+
+    public static float getOpacity(Context context) {
+        return clampOpacity(preferences(context).getFloat(PREFERENCE_OPACITY, DEFAULT_OPACITY));
+    }
+
+    public static float setOpacity(Context context, float opacity) {
+        float normalized = clampOpacity(opacity);
+        preferences(context).edit().putFloat(PREFERENCE_OPACITY, normalized).apply();
+        FloatingWindowService service = activeService;
+        if (service != null) service.mainHandler.post(service::applyOpacity);
+        return normalized;
+    }
+
+    private static SharedPreferences preferences(Context context) {
+        return context.getApplicationContext().getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
+    }
+
+    private static float clampOpacity(float opacity) {
+        if (Float.isNaN(opacity) || Float.isInfinite(opacity)) return DEFAULT_OPACITY;
+        return Math.max(MIN_OPACITY, Math.min(1f, opacity));
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        activeService = this;
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!Settings.canDrawOverlays(this)) {
+        if (!isEnabledPreference(this) || !Settings.canDrawOverlays(this)) {
+            setEnabledPreference(this, false);
+            clearEnableAfterGrantPending(this);
             stopSelf();
             return START_NOT_STICKY;
         }
         try {
             showBubble();
             startAsForeground();
+            watchOverlayPermission();
             return START_STICKY;
         } catch (Exception ignored) {
             hideBubble();
+            setEnabledPreference(this, false);
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -55,7 +145,9 @@ public class FloatingWindowService extends Service {
 
     @Override
     public void onDestroy() {
+        mainHandler.removeCallbacks(permissionWatcher);
         hideBubble();
+        if (activeService == this) activeService = null;
         super.onDestroy();
     }
 
@@ -80,11 +172,13 @@ public class FloatingWindowService extends Service {
         background.setStroke(dp(2), Color.argb(80, 255, 255, 255));
         view.setBackground(background);
         view.setElevation(dp(8));
+        view.setAlpha(getOpacity(this));
         int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE;
         layoutParams = new WindowManager.LayoutParams(dp(56), dp(56), type, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT);
         layoutParams.gravity = Gravity.TOP | Gravity.START;
-        layoutParams.x = dp(12);
-        layoutParams.y = dp(180);
+        layoutParams.x = preferences(this).getInt(PREFERENCE_X, dp(12));
+        layoutParams.y = preferences(this).getInt(PREFERENCE_Y, dp(180));
+        clampPosition();
         attachDrag(view);
         windowManager.addView(view, layoutParams);
         bubble = view;
@@ -92,6 +186,7 @@ public class FloatingWindowService extends Service {
     }
 
     private void hideBubble() {
+        mainHandler.removeCallbacks(permissionWatcher);
         overlayShowing = false;
         if (windowManager != null && bubble != null) {
             try { windowManager.removeView(bubble); } catch (Exception ignored) { }
@@ -99,6 +194,15 @@ public class FloatingWindowService extends Service {
         bubble = null;
         layoutParams = null;
         windowManager = null;
+    }
+
+    private void applyOpacity() {
+        if (bubble != null) bubble.setAlpha(getOpacity(this));
+    }
+
+    private void watchOverlayPermission() {
+        mainHandler.removeCallbacks(permissionWatcher);
+        mainHandler.postDelayed(permissionWatcher, 1500L);
     }
 
     private void attachDrag(View view) {
@@ -120,21 +224,51 @@ public class FloatingWindowService extends Service {
                         moved = false;
                         return true;
                     case MotionEvent.ACTION_MOVE:
-                        int nextX = startX + Math.round(event.getRawX() - downX);
-                        int nextY = startY + Math.round(event.getRawY() - downY);
+                        int nextX = clampX(startX + Math.round(event.getRawX() - downX));
+                        int nextY = clampY(startY + Math.round(event.getRawY() - downY));
                         moved = moved || Math.abs(nextX - startX) > dp(4) || Math.abs(nextY - startY) > dp(4);
                         layoutParams.x = nextX;
                         layoutParams.y = nextY;
                         try { windowManager.updateViewLayout(touched, layoutParams); } catch (Exception ignored) { }
                         return true;
                     case MotionEvent.ACTION_UP:
+                        savePosition();
                         if (!moved) openApp();
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        savePosition();
                         return true;
                     default:
                         return true;
                 }
             }
         });
+    }
+
+    private void clampPosition() {
+        if (layoutParams == null) return;
+        layoutParams.x = clampX(layoutParams.x);
+        layoutParams.y = clampY(layoutParams.y);
+    }
+
+    private int clampX(int value) {
+        int width = layoutParams == null ? dp(56) : layoutParams.width;
+        int max = Math.max(0, getResources().getDisplayMetrics().widthPixels - width);
+        return Math.max(0, Math.min(value, max));
+    }
+
+    private int clampY(int value) {
+        int height = layoutParams == null ? dp(56) : layoutParams.height;
+        int max = Math.max(0, getResources().getDisplayMetrics().heightPixels - height);
+        return Math.max(0, Math.min(value, max));
+    }
+
+    private void savePosition() {
+        if (layoutParams == null) return;
+        preferences(this).edit()
+            .putInt(PREFERENCE_X, layoutParams.x)
+            .putInt(PREFERENCE_Y, layoutParams.y)
+            .apply();
     }
 
     private void openApp() {
