@@ -47,8 +47,10 @@ import org.json.JSONTokener;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 
 /**
  * User-enabled Android overlay for quickly finding and sharing local memes.
@@ -91,13 +93,15 @@ public class FloatingWindowService extends Service {
     private TextView panelEmpty;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ArrayList<String> recommendedTags = new ArrayList<>();
-    private String selectedFilter = FILTER_RECENT;
+    private String selectedFilter = FILTER_FREQUENT;
     private String selectedTag = "";
     private String panelSearchText = "";
     private int loadedCount = 0;
     private int totalCount = 0;
     private int snapshotGeneration = 0;
     private boolean snapshotLoading = false;
+    private int snapshotRequestSequence = 0;
+    private final Map<String, SnapshotRequest> pendingSnapshotRequests = new HashMap<>();
     private boolean panelOpenedByRecommendation = false;
     private final Runnable searchDebounce = () -> {
         if (panel == null) return;
@@ -147,6 +151,27 @@ public class FloatingWindowService extends Service {
             start(context);
         }
         return true;
+    }
+
+    /** Called by the WebView whenever IndexedDB changes; no original image bytes are included. */
+    public static void syncMiniCatalog(Context context, JSONArray items) {
+        FloatingMiniLibraryCache.get(context).syncCatalog(items == null ? new JSONArray() : items);
+        FloatingWindowService service = activeService;
+        if (service != null) {
+            service.mainHandler.post(() -> {
+                // If the user left the panel open while changing the main
+                // library, refresh it against the newest bridge/cache state.
+                if (service.panel != null) service.reloadMiniLibrary();
+            });
+        }
+    }
+
+    /** Receives a page generated asynchronously from the current IndexedDB records. */
+    public static void deliverMiniSnapshot(Context context, String requestId, JSONObject snapshot) {
+        if (snapshot == null) return;
+        FloatingMiniLibraryCache.get(context).cacheSnapshot(snapshot);
+        FloatingWindowService service = activeService;
+        if (service != null) service.mainHandler.post(() -> service.consumeDeliveredSnapshot(requestId, snapshot));
     }
 
     public static void setEnabledPreference(Context context, boolean enabled) {
@@ -306,7 +331,7 @@ public class FloatingWindowService extends Service {
         panelOpenedByRecommendation = fromRecommendation && !cleaned.isEmpty();
         if (panelOpenedByRecommendation) selectRecommendationFilter();
         else {
-            selectedFilter = FILTER_RECENT;
+            selectedFilter = FILTER_FREQUENT;
             selectedTag = "";
         }
         buildMiniPanel();
@@ -356,6 +381,7 @@ public class FloatingWindowService extends Service {
         panelEmpty = null;
         snapshotLoading = false;
         snapshotGeneration++;
+        pendingSnapshotRequests.clear();
         loadedCount = 0;
         totalCount = 0;
         panelOpenedByRecommendation = false;
@@ -375,7 +401,9 @@ public class FloatingWindowService extends Service {
         root.setPadding(dp(12), dp(11), dp(12), dp(11));
         root.setBackground(roundRect(Color.rgb(248, 252, 249), dp(18), Color.argb(58, 79, 122, 94), dp(1)));
         root.setElevation(dp(12));
-        root.setAlpha(getOpacity(this));
+        // The compact library remains readable above another app even when the
+        // user deliberately makes the small floating ball translucent.
+        root.setAlpha(1f);
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -461,12 +489,12 @@ public class FloatingWindowService extends Service {
     private void reloadMiniLibrary() {
         if (panel == null || memeGrid == null) return;
         snapshotGeneration++;
+        pendingSnapshotRequests.clear();
         loadedCount = 0;
         totalCount = 0;
         snapshotLoading = false;
         memeGrid.removeAllViews();
-        if (panelEmpty != null) panelEmpty.setVisibility(View.GONE);
-        if (memeScroll != null) memeScroll.setVisibility(View.VISIBLE);
+        showLoading();
         rebuildTagRow(null);
         requestSnapshotPage(true);
     }
@@ -487,40 +515,113 @@ public class FloatingWindowService extends Service {
             JSONArray matching = new JSONArray();
             for (String tag : recommendedTags) matching.put(tag);
             request.put("recommendedTags", matching);
-            String source = "(async()=>{try{const helper=window.__xinyuFloatingMini;if(!helper){return JSON.stringify({ready:false});}return JSON.stringify(await helper.getSnapshot(" + request.toString() + "));}catch(_){return JSON.stringify({ready:false});}})()";
-            boolean sent = MainActivity.evaluateFloatingJavascript(source, (raw) -> mainHandler.post(() -> consumeSnapshotResult(generation, raw)));
-            if (!sent) showBridgeUnavailable(generation);
+            String requestId = "mini-" + generation + "-" + (++snapshotRequestSequence);
+            pendingSnapshotRequests.put(requestId, new SnapshotRequest(generation, request));
+            // evaluateJavascript can only return the immediate boolean hand-off.
+            // The asynchronous IndexedDB thumbnail page comes back via the
+            // FloatingWindow Capacitor plugin (deliverMiniSnapshot).
+            String source = "(function(){try{const helper=window.__xinyuFloatingMini;if(!helper||typeof helper.requestNativeSnapshot!=='function'){return false;}helper.requestNativeSnapshot(" + JSONObject.quote(requestId) + "," + request.toString() + ");return true;}catch(_){return false;}})()";
+            boolean sent = MainActivity.evaluateFloatingJavascript(source, (raw) -> mainHandler.post(() -> consumeBridgeHandshake(requestId, raw)));
+            if (!sent) {
+                pendingSnapshotRequests.remove(requestId);
+                useCachedSnapshot(generation, request);
+            }
         } catch (Exception ignored) {
-            showBridgeUnavailable(generation);
+            useCachedSnapshot(generation, null);
         }
     }
 
-    private void consumeSnapshotResult(int generation, String raw) {
+    private void consumeBridgeHandshake(String requestId, String raw) {
+        SnapshotRequest pending = pendingSnapshotRequests.get(requestId);
+        if (pending == null || pending.generation != snapshotGeneration || panel == null) return;
+        if (javascriptReturnedTrue(raw)) return;
+        pendingSnapshotRequests.remove(requestId);
+        useCachedSnapshot(pending.generation, pending.request);
+    }
+
+    private void consumeDeliveredSnapshot(String requestId, JSONObject result) {
+        SnapshotRequest pending = pendingSnapshotRequests.remove(requestId);
+        if (pending == null) return;
+        consumeSnapshotPayload(pending.generation, result);
+    }
+
+    private void useCachedSnapshot(int generation, @Nullable JSONObject request) {
+        if (generation != snapshotGeneration || panel == null) return;
+        JSONObject effectiveRequest = request == null ? currentRequest(0) : request;
+        FloatingMiniLibraryCache.CachedSnapshot cached = FloatingMiniLibraryCache.get(this).snapshot(effectiveRequest);
+        if (cached.catalogKnown && cached.payload != null) {
+            consumeSnapshotPayload(generation, cached.payload);
+            return;
+        }
+        if (cached.catalogKnown) {
+            showCachedCatalogUnavailable(generation);
+            return;
+        }
+        showInitialCatalogRequired(generation);
+    }
+
+    private JSONObject currentRequest(int offset) {
+        JSONObject request = new JSONObject();
+        try {
+            request.put("search", panelSearchText);
+            request.put("filter", selectedFilter);
+            request.put("tag", selectedTag);
+            request.put("offset", offset);
+            request.put("limit", PAGE_SIZE);
+            JSONArray matching = new JSONArray();
+            for (String tag : recommendedTags) matching.put(tag);
+            request.put("recommendedTags", matching);
+        } catch (Exception ignored) {
+        }
+        return request;
+    }
+
+    private void consumeSnapshotPayload(int generation, JSONObject result) {
         if (generation != snapshotGeneration || panel == null) return;
         snapshotLoading = false;
         try {
-            Object decoded = new JSONTokener(raw == null ? "" : raw).nextValue();
-            String text = decoded instanceof String ? (String) decoded : raw;
-            JSONObject result = new JSONObject(text);
             if (!result.optBoolean("ready", false)) {
-                showBridgeUnavailable(generation);
+                useCachedSnapshot(generation, currentRequest(loadedCount));
                 return;
             }
             totalCount = Math.max(0, result.optInt("total", 0));
             if (loadedCount == 0) rebuildTagRow(result.optJSONArray("tags"));
             int added = appendMemeCards(result.optJSONArray("items"));
             loadedCount += added;
-            if (memeGrid != null && memeGrid.getChildCount() == 0) showEmpty("没有找到匹配的表情\n换个标签或关键词试试");
+            if (memeGrid != null && memeGrid.getChildCount() == 0) {
+                if (result.optInt("libraryTotal", totalCount) <= 0) showEmpty("还没有表情，先去心语添加一些吧", false);
+                else showEmpty("没有找到匹配的表情\n换个标签或关键词试试", false);
+            }
             else hideEmpty();
         } catch (Exception ignored) {
-            showBridgeUnavailable(generation);
+            useCachedSnapshot(generation, currentRequest(loadedCount));
         }
     }
 
-    private void showBridgeUnavailable(int generation) {
+    private void showInitialCatalogRequired(int generation) {
         if (generation != snapshotGeneration || panel == null) return;
         snapshotLoading = false;
-        showEmpty("请先打开一次心语，以加载你的本地表情库\n点击这里打开应用");
+        showEmpty("请先打开一次心语，以加载你的本地表情库\n点击这里打开应用", true);
+    }
+
+    private void showCachedCatalogUnavailable(int generation) {
+        if (generation != snapshotGeneration || panel == null) return;
+        snapshotLoading = false;
+        showEmpty("表情库缓存暂时不可用\n点击这里打开应用以自动恢复", true);
+    }
+
+    private void showLoading() {
+        showEmpty("正在加载表情库…", false);
+    }
+
+    private static boolean javascriptReturnedTrue(String raw) {
+        try {
+            Object decoded = new JSONTokener(raw == null ? "" : raw).nextValue();
+            if (decoded instanceof Boolean) return (Boolean) decoded;
+            if (decoded instanceof String) return "true".equalsIgnoreCase((String) decoded);
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     private int appendMemeCards(JSONArray items) {
@@ -584,9 +685,7 @@ public class FloatingWindowService extends Service {
     private void rebuildTagRow(@Nullable JSONArray tags) {
         if (tagRow == null) return;
         tagRow.removeAllViews();
-        addTagButton("最近", FILTER_RECENT, "");
         addTagButton("常用", FILTER_FREQUENT, "");
-        if (recommendedTags.size() > 1) addTagButton("推荐", FILTER_RECOMMENDED, "");
         if (tags == null) return;
         for (int index = 0; index < tags.length(); index++) {
             JSONObject item = tags.optJSONObject(index);
@@ -617,10 +716,11 @@ public class FloatingWindowService extends Service {
         tagRow.addView(button, params);
     }
 
-    private void showEmpty(String text) {
+    private void showEmpty(String text, boolean opensApp) {
         if (panelEmpty != null) {
             panelEmpty.setText(text);
             panelEmpty.setVisibility(View.VISIBLE);
+            panelEmpty.setOnClickListener(opensApp ? (view) -> openApp() : null);
         }
         if (memeScroll != null) memeScroll.setVisibility(View.INVISIBLE);
     }
@@ -632,8 +732,14 @@ public class FloatingWindowService extends Service {
 
     private void shareMeme(String id) {
         hideMiniLibrary(false);
-        String source = "(async()=>{try{const helper=window.__xinyuFloatingMini;if(helper){await helper.share(" + JSONObject.quote(id) + ");}}catch(_){}})()";
-        MainActivity.evaluateFloatingJavascript(source, null);
+        String source = "(function(){try{const helper=window.__xinyuFloatingMini;if(!helper||typeof helper.share!=='function'){return false;}void helper.share(" + JSONObject.quote(id) + ");return true;}catch(_){return false;}})()";
+        boolean sent = MainActivity.evaluateFloatingJavascript(source, (raw) -> mainHandler.post(() -> {
+            if (!javascriptReturnedTrue(raw)) openApp();
+        }));
+        // A cached thumbnail is not an original image. If the WebView process
+        // is gone, return the user to the real library instead of pretending a
+        // share succeeded.
+        if (!sent) openApp();
     }
 
     private void attachBubbleDrag(View view) {
@@ -736,7 +842,6 @@ public class FloatingWindowService extends Service {
     private void applyOpacity() {
         float alpha = getOpacity(this);
         if (bubble != null) bubble.setAlpha(alpha);
-        if (panel != null) panel.setAlpha(alpha);
     }
 
     private void watchOverlayPermission() {
@@ -799,6 +904,16 @@ public class FloatingWindowService extends Service {
             }
         }
         return Collections.unmodifiableList(new ArrayList<>(unique));
+    }
+
+    private static final class SnapshotRequest {
+        final int generation;
+        final JSONObject request;
+
+        SnapshotRequest(int generation, JSONObject request) {
+            this.generation = generation;
+            this.request = request;
+        }
     }
 
     private static List<String> consumePendingRecommendationTags() {

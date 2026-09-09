@@ -1,5 +1,6 @@
 package com.puff.meme;
 
+import android.content.ComponentName;
 import android.content.Intent;
 import android.provider.Settings;
 
@@ -18,6 +19,11 @@ import java.util.ArrayList;
 /** Narrow bridge for the opt-in accessibility recommendation setting. */
 @CapacitorPlugin(name = "AccessibilityRecommendation")
 public class AccessibilityRecommendationPlugin extends Plugin {
+    // There is no stable public Android SDK action for a particular service's
+    // detail screen. AOSP/compatible ROMs may handle this action; every other
+    // device deliberately falls back to the documented accessibility list.
+    private static final String ACTION_ACCESSIBILITY_DETAILS_SETTINGS = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS";
+
     @PluginMethod
     public void getStatus(PluginCall call) {
         MemeRecommendationPreferences.reconcilePermission(getContext());
@@ -33,7 +39,7 @@ public class AccessibilityRecommendationPlugin extends Plugin {
             return;
         }
         if (enableAfterGrant) MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), true);
-        startActivityForResult(call, new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), "accessibilityRecommendationPermissionResult");
+        openAccessibilitySettings(call);
     }
 
     @ActivityCallback
@@ -83,5 +89,29 @@ public class AccessibilityRecommendationPlugin extends Plugin {
         response.put("enabled", granted && MemeRecommendationPreferences.isProcessingEnabled(getContext()));
         response.put("mode", MemeRecommendationPreferences.getMatchMode(getContext()));
         return response;
+    }
+
+    private void openAccessibilitySettings(PluginCall call) {
+        ComponentName service = new ComponentName(getContext(), MemeRecommendationAccessibilityService.class);
+        Intent details = new Intent(ACTION_ACCESSIBILITY_DETAILS_SETTINGS);
+        details.putExtra(Intent.EXTRA_COMPONENT_NAME, service.flattenToString());
+        try {
+            if (details.resolveActivity(getContext().getPackageManager()) != null) {
+                startActivityForResult(call, details, "accessibilityRecommendationPermissionResult");
+                return;
+            }
+        } catch (Exception ignored) {
+            // Fall through to the documented generic settings page.
+        }
+        Intent settings = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+        // This hint is ignored safely on Android versions that do not support
+        // pre-selecting an accessibility service.
+        settings.putExtra(Intent.EXTRA_COMPONENT_NAME, service.flattenToString());
+        try {
+            startActivityForResult(call, settings, "accessibilityRecommendationPermissionResult");
+        } catch (Exception error) {
+            MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), false);
+            call.reject("无法打开 Android 无障碍设置", error);
+        }
     }
 }

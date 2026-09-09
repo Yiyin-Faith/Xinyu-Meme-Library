@@ -12,12 +12,12 @@ import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, i
 import { exportLibrary, mergeBackup, readBackup, type ExportProgress } from './lib/backup';
 import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
 import { fetchOnlineImage, searchOnline } from './lib/online';
-import { getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, useImage } from './lib/platform';
+import { deliverAndroidFloatingMiniSnapshot, getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, syncAndroidFloatingMiniCatalog, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
-import { createFloatingMiniBridge, type FloatingMiniBridge } from './lib/floating-mini';
+import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.5.3';
+const CURRENT_VERSION = '0.5.4';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -25,7 +25,9 @@ declare global {
 }
 
 function App() {
-  const memes = useLiveQuery(() => db.memes.orderBy('createdAt').reverse().toArray(), []) ?? [];
+  const queriedMemes = useLiveQuery(() => db.memes.orderBy('createdAt').reverse().toArray(), []);
+  const memes = queriedMemes ?? [];
+  const memesLoaded = queriedMemes !== undefined;
   const collections = useLiveQuery(() => db.collections.orderBy('updatedAt').toArray(), []) ?? [];
   const settings = useLiveQuery(() => db.settings.get('preferences'), []) ?? defaultSettings;
   const [ready, setReady] = useState(false);
@@ -101,11 +103,15 @@ function App() {
     void setAndroidAccessibilityRecommendationTags(tags.map(([tag]) => tag)).catch(() => undefined);
   }, [ready, tags]);
   useEffect(() => {
-    if (!ready || !isAndroid) return;
-    const bridge = createFloatingMiniBridge(memes);
+    // Do not overwrite Android's last usable catalog with the temporary []
+    // produced while Dexie is still opening. The bridge and the persisted
+    // metadata snapshot are published only after this live query has loaded.
+    if (!ready || !isAndroid || !memesLoaded) return;
+    const bridge = createFloatingMiniBridge(memes, deliverAndroidFloatingMiniSnapshot);
     window.__xinyuFloatingMini = bridge;
+    void syncAndroidFloatingMiniCatalog(floatingMiniCatalog(memes)).catch(() => undefined);
     return () => { if (window.__xinyuFloatingMini === bridge) delete window.__xinyuFloatingMini; };
-  }, [ready, memes]);
+  }, [ready, memesLoaded, memes]);
   const visibleMemes = useMemo(() => {
     if (view === 'online' || view === 'sync' || view === 'settings' || view === 'tags') return [];
     return memes.filter((meme) => {
@@ -250,9 +256,32 @@ function TagShortcuts({ tags, activeTag, onSelect }: { tags: [string, number][];
   return <div className="tag-shortcuts" aria-label="按标签筛选"><span><Tag size={14} />标签</span>{tags.slice(0, 12).map(([tag, count]) => <button key={tag} type="button" className={activeTag === tag ? 'active' : ''} onClick={() => onSelect(tag)}>#{tag}<em>{count}</em></button>)}</div>;
 }
 
+function AccessibilityRecommendationNotice({ onCancel, onContinue }: { onCancel: () => void; onContinue: () => void }) {
+  const [unlocked, setUnlocked] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setUnlocked(true), 1000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return <Modal title="开启输入关键词推荐" onClose={onCancel}>
+    <div className="recommendation-notice">
+      <div className="recommendation-notice-copy">
+        <p>开启后，心语会通过 Android 无障碍服务<span className="privacy-emphasis">读取当前输入框文字</span>，并与你设置的表情 Tag / 关键词进行本地匹配。</p>
+        <p>输入文字仅用于本地匹配，<span className="privacy-emphasis">不会保存</span>、<span className="privacy-emphasis">不会上传</span>、不会写入日志或<span className="privacy-emphasis">不会发送给 AI</span>。</p>
+        <p>你可以随时在心语或 Android 系统设置中关闭此功能。</p>
+      </div>
+      <div className="recommendation-notice-actions">
+        <button type="button" className="glass-button" onClick={onCancel}>算了</button>
+        <button type="button" className="primary-button" disabled={!unlocked} onClick={onContinue}>{unlocked ? '我知道自己在做什么' : '我知道自己在做什么 (1)'}</button>
+      </div>
+    </div>
+  </Modal>;
+}
+
 function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; onNotify: (message: string) => void }) {
   const [floatingOpacity, setFloatingOpacity] = useState(0.82);
   const [recommendation, setRecommendation] = useState<{ granted: boolean; enabled: boolean; mode: 'exact' | 'contains' }>({ granted: false, enabled: false, mode: 'exact' });
+  const [recommendationNoticeOpen, setRecommendationNoticeOpen] = useState(false);
+  const [recommendationRequesting, setRecommendationRequesting] = useState(false);
   useEffect(() => {
     if (!isAndroid) return;
     let disposed = false;
@@ -297,6 +326,23 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
     setFloatingOpacity(opacity);
     void setAndroidFloatingWindowOpacity(opacity).catch(() => onNotify('悬浮窗透明度保存失败'));
   };
+  const beginRecommendationPermission = async () => {
+    setRecommendationNoticeOpen(false);
+    setRecommendationRequesting(true);
+    try {
+      const status = await requestAndroidAccessibilityRecommendationPermission(true);
+      setRecommendation(status);
+      if (status.enabled) onNotify('输入关键词自动推荐已开启；仅命中自己的标签时才会展开候选表情');
+      else onNotify('已打开系统无障碍设置，请开启“心语输入表情推荐”；返回后会自动同步状态');
+    } catch (error) { onNotify(error instanceof Error ? error.message : '无障碍权限设置失败'); }
+    finally { setRecommendationRequesting(false); }
+  };
+  const cancelRecommendationPermission = () => {
+    setRecommendationNoticeOpen(false);
+    // The modal is shown only while the setting is off, but explicitly keep
+    // native processing off if the user closes it during a state refresh.
+    void setAndroidAccessibilityRecommendationEnabled(false).then(setRecommendation).catch(() => undefined);
+  };
   const changeRecommendation = async (enabled: boolean) => {
     if (!isAndroid) return;
     try {
@@ -306,12 +352,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
         return;
       }
       if (!settings.floatingWindow) { onNotify('请先开启悬浮表情助手，推荐结果会显示在那里'); return; }
-      const accepted = window.confirm('开启后，心语将通过 Android 无障碍服务读取当前输入框文字，仅在本机与您的表情标签进行匹配，用于推荐相关表情。\n\n输入内容不会保存、上传、写入日志或用于其他用途。\n\n您可以随时关闭此功能或在系统设置中撤销无障碍权限。');
-      if (!accepted) return;
-      const status = await requestAndroidAccessibilityRecommendationPermission(true);
-      setRecommendation(status);
-      if (status.enabled) onNotify('输入关键词自动推荐已开启；仅命中自己的标签时才会展开候选表情');
-      else onNotify('请在系统无障碍设置中开启“心语输入表情推荐”，返回后会自动继续开启');
+      setRecommendationNoticeOpen(true);
     } catch (error) { onNotify(error instanceof Error ? error.message : '无障碍权限设置失败'); }
   };
   const changeRecommendationMode = (mode: 'exact' | 'contains') => {
@@ -325,7 +366,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} />
       <SettingToggle title="悬浮表情助手" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : isAndroid ? '显示可拖动的悬浮球；点按后展开只用于快速找图和分享的迷你表情库。' : '仅 Windows 和 Android 客户端可用。'} value={settings.floatingWindow} disabled={!isDesktop && !isAndroid} onChange={(value) => set('floatingWindow', value)} />
       {isAndroid && <label className="floating-opacity"><span><strong>悬浮窗透明度</strong><small>拖动后立即应用；较低透明度可减少对其他应用的遮挡。</small></span><div><input type="range" min="0.3" max="1" step="0.05" value={floatingOpacity} aria-label="悬浮窗透明度" onChange={(event) => changeFloatingOpacity(Number(event.target.value))} /><output>{Math.round(floatingOpacity * 100)}%</output></div></label>}
-      {isAndroid && <><SettingToggle title="输入关键词自动推荐表情" description={settings.floatingWindow ? '默认关闭。仅在命中你自己的标签时展开候选表情，不会自动发送。' : '需要先开启悬浮表情助手，推荐候选才有安全的显示位置。'} value={recommendation.enabled} disabled={!settings.floatingWindow} onChange={changeRecommendation} /><label className="recommendation-mode"><span><strong>关键词匹配方式</strong><small>完全匹配只匹配整个输入；包含关键词可匹配“我真的无语了”这类输入。</small></span><select aria-label="关键词匹配方式" value={recommendation.mode} disabled={!settings.floatingWindow} onChange={(event) => changeRecommendationMode(event.target.value as 'exact' | 'contains')}><option value="exact">完全匹配</option><option value="contains">包含关键词</option></select></label></>}
+      {isAndroid && <><SettingToggle title="输入关键词自动推荐表情" description={settings.floatingWindow ? '默认关闭。仅在命中你自己的标签时展开候选表情，不会自动发送。' : '需要先开启悬浮表情助手，推荐候选才有安全的显示位置。'} value={recommendation.enabled} disabled={!settings.floatingWindow || recommendationRequesting} onChange={changeRecommendation} /><label className="recommendation-mode"><span><strong>关键词匹配方式</strong><small>完全匹配只匹配整个输入；包含关键词可匹配“我真的无语了”这类输入。</small></span><select aria-label="关键词匹配方式" value={recommendation.mode} disabled={!settings.floatingWindow || recommendationRequesting} onChange={(event) => changeRecommendationMode(event.target.value as 'exact' | 'contains')}><option value="exact">完全匹配</option><option value="contains">包含关键词</option></select></label></>}
     </div>
     <div className="settings-card glass">
       <div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看功能变化。</p></div></div>
@@ -333,6 +374,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.5.4</strong><ul><li>修复 Android 迷你表情库与主图库不同步的问题：当前 IndexedDB 页面通过原生回调交付，服务重启后仍可用私有元数据与按页缩略图恢复。</li><li>迷你表情库精简为搜索、常用、标签和图片网格；展开面板保持清晰不透明，悬浮球透明度仍可单独调节。</li><li>输入关键词推荐改用心语风格的隐私说明；确认前有 1 秒防误触，并优先跳转到对应无障碍服务设置、返回后自动同步授权状态。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.3</strong><ul><li>Android 悬浮球升级为迷你表情库：可按最近、常用和现有标签筛选，按需加载缩略图并直接分享同一份本地原图。</li><li>新增可选的“输入关键词自动推荐表情”：无障碍输入仅在本机临时匹配自己的标签，支持完全匹配和包含关键词。</li><li>悬浮球支持边缘吸附、位置恢复和安全区域避让；悬浮权限或无障碍权限撤销后会安全停止。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.3</strong><ul><li>修复手机侧边导航中设置被底栏遮挡的问题，长列表可独立滚动。</li><li>Android 图片库与分享临时文件保持在应用私有范围，升级时会为旧应用专属目录补上媒体隔离标记。</li><li>补全 Android 悬浮窗的权限恢复、后台保持、位置记忆和透明度调节。</li><li>Windows 程序补齐图标、产品版本信息及文件签名。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 备份改为先逐张写入外部持久目录，再由原生层流式生成 ZIP；压缩失败时原始备份仍会保留。</li><li>新增 Android 真正的系统悬浮窗：会先请求“显示在其他应用上层”权限，再显示可拖动入口。</li><li>修复手机侧栏过长时无法滑动的问题。</li><li>Android 发布包改为固定签名，后续版本可保持覆盖安装；构建缺少固定签名时不再生成临时 APK。</li></ul></section>
@@ -345,6 +387,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       </details>
     </div>
     <div className="settings-card glass"><div className="setting-title"><div className="setting-icon"><Info size={18} /></div><div><h2>关于心语表情库</h2><p>跨 Windows 与 Android 的私人表情库。</p></div></div><div className="about-row"><span>当前平台</span><strong>{platformName}</strong></div><div className="about-row"><span>数据位置</span><strong>本机 IndexedDB</strong></div><div className="about-row"><span>版本</span><strong>v{CURRENT_VERSION} · 离线优先</strong></div><p className="about-note">参考 OhMyMeme 的快捷调用与复制路径，参考 Rays 的标签、正则搜索和分享思路。原图和元数据不上传云端，在线图库仅在你主动打开时请求。</p></div>
+    {recommendationNoticeOpen && <AccessibilityRecommendationNotice onCancel={cancelRecommendationPermission} onContinue={() => { void beginRecommendationPermission(); }} />}
   </div>;
 }
 function SettingToggle({ title, description, value, onChange, disabled = false }: { title: string; description: string; value: boolean; onChange: (value: boolean) => void; disabled?: boolean }) { return <label className={`setting-toggle ${disabled ? 'disabled' : ''}`}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={value} disabled={disabled} onChange={(e) => onChange(e.target.checked)} /><i /></label>; }

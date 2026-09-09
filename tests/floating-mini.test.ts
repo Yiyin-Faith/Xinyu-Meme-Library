@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { floatingMiniTags, selectFloatingMiniMemes } from '../src/lib/floating-mini';
+import { createFloatingMiniBridge, floatingMiniCatalog, floatingMiniTags, selectFloatingMiniMemes } from '../src/lib/floating-mini';
 import type { Meme } from '../src/types';
 
 function meme(id: string, tags: string[], overrides: Partial<Meme> = {}): Meme {
@@ -45,5 +45,26 @@ describe('floating mini library selection', () => {
 
   it('shows multiple accessibility matches as a deterministic local union', () => {
     expect(selectFloatingMiniMemes(memes, { filter: 'recommended', recommendedTags: ['猫猫', '开心'] }).map((item) => item.id)).toEqual(['also-used', 'new']);
+  });
+
+  it('creates a metadata-only recovery catalog without copying original Blobs', () => {
+    const [entry] = floatingMiniCatalog([meme('cached', ['猫猫'], { note: '聊天时用', useCount: 8, updatedAt: 9 })]);
+    expect(entry).toMatchObject({ id: 'cached', title: 'cached', tags: ['猫猫'], note: '聊天时用', useCount: 8, updatedAt: 9 });
+    expect(entry).not.toHaveProperty('blob');
+  });
+
+  it('reports the finished IndexedDB page through the native callback channel', async () => {
+    let resolveReport!: () => void;
+    const report = new Promise<void>((resolve) => { resolveReport = resolve; });
+    const reports: Array<{ requestId: string; snapshot: { ready: boolean; total?: number; libraryTotal?: number } }> = [];
+    const bridge = createFloatingMiniBridge(memes, async (requestId, snapshot) => {
+      reports.push({ requestId, snapshot });
+      resolveReport();
+    });
+
+    bridge.requestNativeSnapshot('page-1', { filter: 'frequent', limit: 1 });
+    await report;
+
+    expect(reports).toEqual([{ requestId: 'page-1', snapshot: expect.objectContaining({ ready: true, total: 3, libraryTotal: 3 }) }]);
   });
 });

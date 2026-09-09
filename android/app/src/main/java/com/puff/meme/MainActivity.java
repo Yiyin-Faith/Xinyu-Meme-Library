@@ -55,9 +55,13 @@ public class MainActivity extends BridgeActivity {
         MainActivity activity = activeActivity.get();
         if (activity == null || activity.isFinishing() || activity.getBridge() == null) return false;
         activity.runOnUiThread(() -> {
-            if (activity.isFinishing() || activity.getBridge() == null) return;
+            if (activity.isFinishing() || activity.getBridge() == null) {
+                if (callback != null) callback.onReceiveValue("false");
+                return;
+            }
             WebView webView = activity.getBridge().getWebView();
             if (webView != null) webView.evaluateJavascript(script, callback);
+            else if (callback != null) callback.onReceiveValue("false");
         });
         return true;
     }

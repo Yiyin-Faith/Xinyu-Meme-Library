@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin, type Plugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import type { Meme } from '../types';
+import type { FloatingMiniCatalogEntry, FloatingMiniSnapshot } from './floating-mini';
 
 export const isAndroid = Capacitor.getPlatform() === 'android';
 export const isDesktop = !!window.puffDesktop;
@@ -14,6 +15,8 @@ interface NativeFloatingWindow extends Plugin {
   requestPermission(options: { enableAfterGrant: boolean }): Promise<AndroidFloatingWindowStatus>;
   setEnabled(options: { enabled: boolean }): Promise<AndroidFloatingWindowStatus>;
   setOpacity(options: { opacity: number }): Promise<AndroidFloatingWindowStatus>;
+  syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<void>;
+  deliverMiniSnapshot(options: { requestId: string; snapshot: FloatingMiniSnapshot | { ready: false } }): Promise<void>;
 }
 const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
 
@@ -44,6 +47,21 @@ export async function setAndroidFloatingWindow(enabled: boolean): Promise<Androi
 export async function setAndroidFloatingWindowOpacity(opacity: number): Promise<AndroidFloatingWindowStatus> {
   if (!isAndroid) return { granted: false, enabled: false, opacity: 0.82 };
   return FloatingWindow.setOpacity({ opacity: Math.max(0.3, Math.min(1, opacity)) });
+}
+
+/**
+ * Stores metadata only for the native overlay's recovery cache. Original image
+ * Blobs remain in IndexedDB; thumbnails are supplied only page-by-page.
+ */
+export async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogEntry[]): Promise<void> {
+  if (!isAndroid) return;
+  await FloatingWindow.syncMiniCatalog({ items });
+}
+
+/** Completes a page request that Android WebView cannot return as a Promise. */
+export async function deliverAndroidFloatingMiniSnapshot(requestId: string, snapshot: FloatingMiniSnapshot | { ready: false }): Promise<void> {
+  if (!isAndroid) return;
+  await FloatingWindow.deliverMiniSnapshot({ requestId, snapshot });
 }
 
 export async function getAndroidAccessibilityRecommendationStatus(): Promise<AndroidAccessibilityRecommendationStatus> {

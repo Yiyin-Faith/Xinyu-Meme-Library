@@ -13,14 +13,27 @@ export type FloatingMiniRequest = {
 export type FloatingMiniSnapshot = {
   ready: true;
   total: number;
+  /** Number of images in the whole library before search/tag filtering. */
+  libraryTotal: number;
   tags: { name: string; count: number }[];
   items: { id: string; title: string; thumbnail: string }[];
 };
 
+/**
+ * Small metadata-only representation stored by Android for overlay recovery.
+ * Original Blobs never leave IndexedDB; Android may cache only the requested
+ * 144px JPEG thumbnails in its private files directory.
+ */
+export type FloatingMiniCatalogEntry = Pick<Meme, 'id' | 'title' | 'tags' | 'note' | 'createdAt' | 'updatedAt' | 'lastUsedAt' | 'useCount'>;
+
 export type FloatingMiniBridge = {
   getSnapshot: (request: FloatingMiniRequest) => Promise<FloatingMiniSnapshot>;
+  /** Starts an async native callback instead of returning a Promise to WebView. */
+  requestNativeSnapshot: (requestId: string, request: FloatingMiniRequest) => void;
   share: (id: string) => Promise<boolean>;
 };
+
+export type FloatingMiniSnapshotReporter = (requestId: string, snapshot: FloatingMiniSnapshot | { ready: false }) => Promise<void>;
 
 const normalize = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase();
 
@@ -40,6 +53,19 @@ export function floatingMiniTags(memes: Meme[]) {
   return [...tags.values()]
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.useCount - a.useCount || b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'))
     .map(({ name, count }) => ({ name, count }));
+}
+
+export function floatingMiniCatalog(memes: Meme[]): FloatingMiniCatalogEntry[] {
+  return memes.map(({ id, title, tags, note, createdAt, updatedAt, lastUsedAt, useCount }) => ({
+    id,
+    title,
+    tags: [...tags],
+    note,
+    createdAt,
+    updatedAt,
+    lastUsedAt,
+    useCount,
+  }));
 }
 
 /** Pure selection against the existing in-memory IndexedDB records. */
@@ -95,19 +121,33 @@ async function thumbnail(blob: Blob) {
   }
 }
 
-export function createFloatingMiniBridge(memes: Meme[]): FloatingMiniBridge {
+export function createFloatingMiniBridge(memes: Meme[], reportSnapshot?: FloatingMiniSnapshotReporter): FloatingMiniBridge {
+  const getSnapshot = async (request: FloatingMiniRequest): Promise<FloatingMiniSnapshot> => {
+    const selected = selectFloatingMiniMemes(memes, request);
+    const offset = Math.max(0, Math.floor(request.offset ?? 0));
+    const limit = Math.max(1, Math.min(30, Math.floor(request.limit ?? 24)));
+    // Deliberately generate only the requested page. The native panel asks
+    // for more as the user scrolls, so a large library is never materialized
+    // as a full-resolution or full-library native copy.
+    const page = selected.slice(offset, offset + limit);
+    const items: FloatingMiniSnapshot['items'] = [];
+    for (const meme of page) items.push({ id: meme.id, title: meme.title, thumbnail: await thumbnail(meme.blob) });
+    return { ready: true, total: selected.length, libraryTotal: memes.length, tags: floatingMiniTags(memes), items };
+  };
+
   return {
-    async getSnapshot(request) {
-      const selected = selectFloatingMiniMemes(memes, request);
-      const offset = Math.max(0, Math.floor(request.offset ?? 0));
-      const limit = Math.max(1, Math.min(30, Math.floor(request.limit ?? 24)));
-      // Deliberately generate only the requested page. The native panel asks
-      // for more as the user scrolls, so a large library is never materialized
-      // as a full-resolution or full-library native copy.
-      const page = selected.slice(offset, offset + limit);
-      const items: FloatingMiniSnapshot['items'] = [];
-      for (const meme of page) items.push({ id: meme.id, title: meme.title, thumbnail: await thumbnail(meme.blob) });
-      return { ready: true, total: selected.length, tags: floatingMiniTags(memes), items };
+    getSnapshot,
+    requestNativeSnapshot(requestId, request) {
+      // Android WebView's evaluateJavascript does not await a returned
+      // Promise. Report the eventual page through the Capacitor bridge rather
+      // than treating the Promise object as an empty/failed snapshot.
+      void (async () => {
+        try {
+          await reportSnapshot?.(requestId, await getSnapshot(request));
+        } catch {
+          try { await reportSnapshot?.(requestId, { ready: false }); } catch { /* Native process may have stopped. */ }
+        }
+      })();
     },
     async share(id) {
       const meme = await db.memes.get(id);

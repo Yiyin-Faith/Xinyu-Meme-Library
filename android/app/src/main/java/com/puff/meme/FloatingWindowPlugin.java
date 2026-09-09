@@ -9,6 +9,7 @@ import android.provider.Settings;
 import androidx.activity.result.ActivityResult;
 
 import com.getcapacitor.JSObject;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -86,6 +87,30 @@ public class FloatingWindowPlugin extends Plugin {
         double requested = call.getDouble("opacity", 0.82d);
         FloatingWindowService.setOpacity(getContext(), (float) requested);
         call.resolve(status());
+    }
+
+    /**
+     * Persist a metadata-only mirror of the existing IndexedDB library so the
+     * foreground service can recover after an Activity/service restart.
+     */
+    @PluginMethod
+    public void syncMiniCatalog(PluginCall call) {
+        JSArray items = call.getArray("items", new JSArray());
+        FloatingWindowService.syncMiniCatalog(getContext(), items);
+        call.resolve();
+    }
+
+    /**
+     * Receives an asynchronously generated WebView page. WebView's
+     * evaluateJavascript cannot await a Promise return value, so this is the
+     * reliable callback path from IndexedDB to the active overlay.
+     */
+    @PluginMethod
+    public void deliverMiniSnapshot(PluginCall call) {
+        String requestId = call.getString("requestId", "");
+        JSObject snapshot = call.getObject("snapshot", new JSObject());
+        if (!requestId.trim().isEmpty()) FloatingWindowService.deliverMiniSnapshot(getContext(), requestId, snapshot);
+        call.resolve();
     }
 
     private void startAndResolve(PluginCall call) {
