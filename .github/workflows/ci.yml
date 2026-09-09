@@ -26,3 +26,32 @@ jobs:
         run: npm test
       - name: Build native web assets
         run: npm run build
+
+  android-debug:
+    name: Android debug build (no release secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and verify local debug APK without release credentials
+        run: npm run android:debug
+      - name: Upload development APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xinyu-Meme-Library-Android-debug
+          path: release/Android/Xinyu-Meme-Library-*-Android-debug.apk
+          if-no-files-found: error
+          retention-days: 7

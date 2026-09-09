@@ -37,20 +37,24 @@ docs/                 使用说明和 GitHub 协作说明
 需要 Node.js 22 或更高版本。
 
 ```powershell
-npm install
+npm ci
 npm run desktop:pack       # 生成 release/PC/win-unpacked/，用于 Windows 测试
 npm run desktop:dist       # 生成可选择安装目录的 Windows 安装包
 npm test                   # 运行单元测试
 node scripts/verify-desktop.mjs
 ```
 
-Android 需要 JDK 21、Android SDK Platform 36 和 Build Tools 36：
+Android 本地开发需要 JDK 21、Android SDK Platform 36 和 Build Tools 36，配置好 `JAVA_HOME` 与 `ANDROID_HOME` 后执行：
 
 ```powershell
-npm run android:build
+npm run android:debug     # 克隆后即可构建开发 APK，无需正式签名密钥
 ```
 
-构建结果会写入 `release/Android/Xinyu-Meme-Library-版本号-Android.apk`。Android 应用的包名 `com.puff.meme` 是历史兼容标识，不能随意修改，否则系统会把它识别为新应用。发布包必须使用固定的 release 签名；密钥配置、GitHub Actions Secret 名称与首次换签名的迁移说明见 [`docs/Android签名说明.md`](docs/Android签名说明.md)。
+开发 APK 写入 `release/Android/Xinyu-Meme-Library-版本号-Android-debug.apk`，使用独立包名 `com.puff.meme.debug` 和“心语表情库（开发版）”名称，可与正式版同时安装。
+
+正式 Android APK 可通过原仓库的 [Actions → Android APK → Run workflow](https://github.com/Yiyin-Faith/Xinyu-Meme-Library/actions/workflows/android-apk.yml) 构建，四项正式签名 Secrets 已配置，协作者无需下载密钥。构建成功后，在本次运行的 Artifacts 中下载 `Xinyu-Meme-Library-Android-APK`。手动运行需要仓库写入权限；推送到 `main` 也会自动构建。
+
+本地生成正式 APK 时，需持有维护者提供的现有密钥并配置签名环境变量，再运行 `npm run android:build`。正式版包名始终为 `com.puff.meme`。完整的克隆、调试、云端打包、本地正式签名及升级说明见 [`docs/Android签名说明.md`](docs/Android签名说明.md)。
 
 完整使用说明见 [`docs/使用说明.md`](docs/使用说明.md)。
 
