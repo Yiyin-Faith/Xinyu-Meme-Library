@@ -22,26 +22,55 @@ const schema = z.object({
   settings: z.object({ id: z.literal('preferences'), reduceMotion: z.boolean(), dense: z.boolean(), onlineSupplement: z.boolean(), floatingWindow: z.boolean().default(false) }).optional(),
 });
 export type Backup = z.infer<typeof schema> & { images: Meme[] };
+export type BackupManifest = z.infer<typeof schema>;
+export type BackupSnapshot = { manifest: BackupManifest; totalBytes: number };
 export type ExportProgress =
   | { phase: 'collecting'; completed: number; total: number; bytesCompleted: number; totalBytes: number }
   | { phase: 'packing'; completed: number; total: number; bytesCompleted: number; totalBytes: number };
 
+/**
+ * Build the small JSON part of a backup without reading every image into an
+ * ArrayBuffer. Android export consumes this snapshot one Blob at a time.
+ */
+export async function createBackupSnapshot(database: LibraryDB = db): Promise<BackupSnapshot> {
+  const [collections, tombstones, settings] = await Promise.all([
+    database.collections.toArray(), database.tombstones.toArray(), database.settings.get('preferences'),
+  ]);
+  const memes: BackupManifest['memes'] = [];
+  let totalBytes = 0;
+  await database.memes.orderBy('createdAt').each((meme) => {
+    const { blob: _blob, ...meta } = meme;
+    memes.push(metadata.parse(meta));
+    totalBytes += meta.size;
+  });
+  return { manifest: { format: 'puff-library', version: 1, exportedAt: Date.now(), memes, collections, tombstones, settings }, totalBytes };
+}
+
+export async function getBackupImage(id: string, database: LibraryDB = db): Promise<Blob> {
+  const meme = await database.memes.get(id);
+  if (!meme) throw new Error('导出期间找不到一张图片，请重新开始备份');
+  return meme.blob;
+}
+
+export function backupManifestText(snapshot: BackupSnapshot) {
+  return JSON.stringify(snapshot.manifest, null, 2);
+}
+
 export async function exportLibrary(database: LibraryDB = db, onProgress?: (progress: ExportProgress) => void): Promise<Blob> {
-  const snapshot = await database.transaction('r', database.memes, database.collections, database.tombstones, database.settings, async () => ({
-    memes: await database.memes.toArray(), collections: await database.collections.toArray(), tombstones: await database.tombstones.toArray(), settings: await database.settings.get('preferences'),
-  }));
-  const totalBytes = snapshot.memes.reduce((n, m) => n + m.size, 0);
+  const snapshot = await createBackupSnapshot(database);
+  const totalBytes = snapshot.totalBytes;
   if (totalBytes > MAX_ARCHIVE) throw new Error('当前版本单个备份最多 256 MB，请先减少库大小');
   const files: Record<string, Uint8Array> = {};
   let bytesCompleted = 0;
-  onProgress?.({ phase: 'collecting', completed: 0, total: snapshot.memes.length, bytesCompleted, totalBytes });
-  for (const [index, meme] of snapshot.memes.entries()) {
-    files[`images/${meme.id}`] = new Uint8Array(await meme.blob.arrayBuffer());
+  onProgress?.({ phase: 'collecting', completed: 0, total: snapshot.manifest.memes.length, bytesCompleted, totalBytes });
+  for (const [index, meme] of snapshot.manifest.memes.entries()) {
+    const blob = await getBackupImage(meme.id, database);
+    files[`images/${meme.id}`] = new Uint8Array(await blob.arrayBuffer());
     bytesCompleted += meme.size;
-    onProgress?.({ phase: 'collecting', completed: index + 1, total: snapshot.memes.length, bytesCompleted, totalBytes });
+    onProgress?.({ phase: 'collecting', completed: index + 1, total: snapshot.manifest.memes.length, bytesCompleted, totalBytes });
   }
-  files['manifest.json'] = strToU8(JSON.stringify({ format: 'puff-library', version: 1, exportedAt: Date.now(), ...snapshot, memes: snapshot.memes.map(({ blob: _blob, ...meta }) => meta) }, null, 2));
-  onProgress?.({ phase: 'packing', completed: snapshot.memes.length, total: snapshot.memes.length, bytesCompleted, totalBytes });
+  files['manifest.json'] = strToU8(backupManifestText(snapshot));
+  onProgress?.({ phase: 'packing', completed: snapshot.manifest.memes.length, total: snapshot.manifest.memes.length, bytesCompleted, totalBytes });
   return new Promise((resolve, reject) => zip(files, { level: 0 }, (error, result) => error ? reject(error) : resolve(new Blob([result as Uint8Array<ArrayBuffer>], { type: 'application/zip' }))));
 }
 export async function readBackup(file: Blob, checkDimensions = true): Promise<Backup> {

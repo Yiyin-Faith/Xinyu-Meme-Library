@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin, type Plugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import type { Meme } from '../types';
@@ -6,6 +6,30 @@ import type { Meme } from '../types';
 export const isAndroid = Capacitor.getPlatform() === 'android';
 export const isDesktop = !!window.puffDesktop;
 export const platformName = isDesktop ? 'Windows 客户端' : isAndroid ? 'Android 客户端' : '浏览器体验版';
+
+export type AndroidFloatingWindowStatus = { granted: boolean; enabled: boolean };
+interface NativeFloatingWindow extends Plugin {
+  getStatus(): Promise<AndroidFloatingWindowStatus>;
+  requestPermission(): Promise<AndroidFloatingWindowStatus>;
+  setEnabled(options: { enabled: boolean }): Promise<AndroidFloatingWindowStatus>;
+}
+const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
+
+export async function getAndroidFloatingWindowStatus(): Promise<AndroidFloatingWindowStatus> {
+  if (!isAndroid) return { granted: false, enabled: false };
+  return FloatingWindow.getStatus();
+}
+
+export async function requestAndroidFloatingWindowPermission(): Promise<AndroidFloatingWindowStatus> {
+  if (!isAndroid) return { granted: false, enabled: false };
+  return FloatingWindow.requestPermission();
+}
+
+export async function setAndroidFloatingWindow(enabled: boolean): Promise<AndroidFloatingWindowStatus> {
+  if (!isAndroid) return { granted: false, enabled: false };
+  return FloatingWindow.setEnabled({ enabled });
+}
+
 export async function setAlwaysOnTop(enabled: boolean): Promise<boolean> {
   if (!window.puffDesktop) return false;
   return window.puffDesktop.setAlwaysOnTop(enabled);

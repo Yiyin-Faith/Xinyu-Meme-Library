@@ -10,8 +10,9 @@ import MemeCard, { useBlobUrl } from './components/MemeCard';
 import Modal from './components/Modal';
 import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, importImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, updateMeme } from './lib/library';
 import { exportLibrary, mergeBackup, readBackup, type ExportProgress } from './lib/backup';
+import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
 import { fetchOnlineImage, searchOnline } from './lib/online';
-import { isAndroid, isDesktop, platformName, saveBlob, setAlwaysOnTop, useImage } from './lib/platform';
+import { isAndroid, isDesktop, platformName, requestAndroidFloatingWindowPermission, saveBlob, setAndroidFloatingWindow, setAlwaysOnTop, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
@@ -52,6 +53,17 @@ function App() {
   useEffect(() => { const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPrimaryTab('library'); document.querySelector<HTMLInputElement>('#global-search')?.focus(); } if (event.key === 'Escape') { setPreviewId(undefined); setManageId(undefined); setEditId(undefined); setImportOpen(false); setBackupOpen(false); setMobileNav(false); } }; window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener); }, []);
   useEffect(() => { if (window.puffDesktop) return window.puffDesktop.onQuickOpen(() => document.querySelector<HTMLInputElement>('#global-search')?.focus()); }, []);
   useEffect(() => { if (!isDesktop) return; void setAlwaysOnTop(settings.floatingWindow).catch(() => undefined); }, [settings.floatingWindow]);
+  useEffect(() => {
+    if (!isAndroid || !settings.floatingWindow) return;
+    void setAndroidFloatingWindow(true).then((status) => {
+      if (status.enabled) return;
+      void db.settings.put({ ...settings, floatingWindow: false });
+      notify(status.granted ? '悬浮窗未能显示，已自动关闭开关' : '悬浮窗权限已关闭，已自动关闭开关');
+    }).catch(() => {
+      void db.settings.put({ ...settings, floatingWindow: false });
+      notify('悬浮窗未能恢复，已自动关闭开关');
+    });
+  }, [settings.id, settings.floatingWindow, notify]);
 
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
   const visibleMemes = useMemo(() => {
@@ -200,12 +212,20 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
   const set = async (key: Exclude<keyof PreferenceSettings, 'id'>, value: boolean) => {
     try {
       if (key === 'floatingWindow') {
-        if (!isDesktop) { onNotify('悬浮窗模式仅支持 Windows 客户端'); return; }
-        const enabled = await setAlwaysOnTop(value);
-        if (enabled !== value) throw new Error('窗口置顶状态没有生效');
+        if (isDesktop) {
+          const enabled = await setAlwaysOnTop(value);
+          if (enabled !== value) throw new Error('窗口置顶状态没有生效');
+        } else if (isAndroid) {
+          if (value) {
+            const permission = await requestAndroidFloatingWindowPermission();
+            if (!permission.granted) { onNotify('未获得“显示在其他应用上层”权限，悬浮窗没有开启'); return; }
+          }
+          const status = await setAndroidFloatingWindow(value);
+          if (status.enabled !== value) throw new Error(value ? '悬浮按钮没有显示，请检查系统悬浮窗权限' : '悬浮窗没有关闭');
+        } else { onNotify('悬浮窗模式仅支持 Windows 和 Android 客户端'); return; }
       }
       await db.settings.put({ ...settings, [key]: value });
-      onNotify(key === 'floatingWindow' ? value ? '悬浮窗模式已开启，窗口会保持在最前' : '悬浮窗模式已关闭' : '偏好设置已更新');
+      onNotify(key === 'floatingWindow' ? value ? isAndroid ? '悬浮窗已开启：可拖动，点按回到图片库' : '悬浮窗模式已开启，窗口会保持在最前' : '悬浮窗模式已关闭' : '偏好设置已更新');
     } catch (error) { onNotify(error instanceof Error ? error.message : '偏好设置更新失败'); }
   };
   return <div className="settings-view">
@@ -214,7 +234,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <SettingToggle title="紧凑网格" description="每屏显示更多表情，适合大收藏库。" value={settings.dense} onChange={(value) => set('dense', value)} />
       <SettingToggle title="减少动态效果" description="关闭流光和弹性动画。" value={settings.reduceMotion} onChange={(value) => set('reduceMotion', value)} />
       <SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} />
-      <SettingToggle title="悬浮窗模式" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : '仅 Windows 客户端可用；移动端需要系统级悬浮权限。'} value={settings.floatingWindow} disabled={!isDesktop} onChange={(value) => set('floatingWindow', value)} />
+      <SettingToggle title="悬浮窗模式" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : isAndroid ? '显示一个可拖动的心语按钮；点按回到图片库，需要系统“显示在其他应用上层”权限。' : '仅 Windows 和 Android 客户端可用。'} value={settings.floatingWindow} disabled={!isDesktop && !isAndroid} onChange={(value) => set('floatingWindow', value)} />
     </div>
     <div className="settings-card glass">
       <div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看功能变化。</p></div></div>
@@ -222,7 +242,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
-          <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 发布包改为固定签名，后续版本可保持覆盖安装。</li><li>GitHub 构建缺少固定签名时将不再生成临时签名 APK。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.4.2</strong><ul><li>Android 备份改为先逐张写入外部持久目录，再由原生层流式生成 ZIP；压缩失败时原始备份仍会保留。</li><li>新增 Android 真正的系统悬浮窗：会先请求“显示在其他应用上层”权限，再显示可拖动入口。</li><li>修复手机侧栏过长时无法滑动的问题。</li><li>Android 发布包改为固定签名，后续版本可保持覆盖安装；构建缺少固定签名时不再生成临时 APK。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.1</strong><ul><li>完整备份导出会显示读取、打包和保存状态，并保留完成提示。</li><li>新增 Windows 悬浮窗模式，让窗口可保持在最前。</li><li>补全 v0.1.0 ～ v0.3.0 的历史更新记录。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.0</strong><ul><li>图片库顶栏固定，二级页面支持返回全部表情。</li><li>设置页加入本地更新检查和更新日志入口。</li><li>整理 Windows 与 Android 的 0.4.0 发布版本。</li></ul></section>
           <section className="changelog-entry"><strong>v0.3.0</strong><ul><li>添加图片支持自定义名称、分组和多个标签。</li><li>标签可从主页直接筛选，管理路径更短。</li></ul></section>
@@ -258,15 +278,30 @@ function ImportModal({ collections, initialFiles, onClose, onNotify }: { collect
   return <Modal title="添加图片" subtitle="名称、分组和标签都可不填；点击添加后会立即入库。" onClose={busy ? () => undefined : onClose}><form className="import-modal" onSubmit={(event) => { void submit(event); }}><input ref={input} className="native-file-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => choose(event.target.files ?? [])} /><button type="button" className="import-picker" onClick={openPicker} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files); }}><ImagePlus size={30} /><strong>{files.length ? `已选择 ${files.length} 张图片` : '点击选择，或把图片拖进来'}</strong><span>{files.length > 1 && title.trim() ? '批量导入时会在自定义名称后追加序号' : '支持批量导入，内容相同的图片会自动去重'}</span></button><label>自定义名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder={files.length > 1 ? '例如：猫猫反应（会自动加序号）' : '不填则使用图片文件名'} /></label><label>分组（可选，可直接新建）<input list="collection-options" value={groupName} onChange={(event) => setGroupName(event.target.value)} maxLength={40} placeholder="例如：日常、游戏、工作" /><datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist></label><label>标签（可选）<div className="tag-editor">{tags.map((tag) => <span key={tag}>#{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}><X size={12} /></button></span>)}<input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } }} placeholder={tags.length ? '继续输入标签' : '输入后按回车添加一个标签'} /></div><small>按回车添加一个标签；不填也可以直接入库。</small></label><div className="import-actions"><button type="button" className="glass-button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '正在入库…' : files.length ? `添加 ${files.length} 张` : '选择图片'}</button></div></form></Modal>;
 }
 
-type BackupStatus = ExportProgress | { phase: 'saving' | 'complete'; fileName: string };
+type BackupStatus = ExportProgress | AndroidBackupProgress
+  | { phase: 'saving' | 'complete'; fileName: string; location?: string }
+  | { phase: 'raw-only'; location: string; error: string }
+  | { phase: 'copy-failed'; location: string; error: string };
 
 function BackupProgressPanel({ status }: { status: BackupStatus }) {
-  const collecting = status.phase === 'collecting';
-  const indeterminate = status.phase === 'packing' || status.phase === 'saving';
-  const percentage = collecting && status.total ? Math.round((status.completed / status.total) * 100) : status.phase === 'complete' ? 100 : 0;
-  const label = collecting ? `正在读取图片 ${status.completed} / ${status.total}` : status.phase === 'packing' ? '正在生成 ZIP 备份' : status.phase === 'saving' ? '正在保存备份文件' : '导出完成';
-  const detail = status.phase === 'collecting' ? `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}` : status.phase === 'packing' ? '正在把原图和信息写入备份包' : status.phase === 'saving' ? (isAndroid ? '请在系统面板选择保存位置或发送方式' : '正在写入你选择的位置') : `${status.fileName} 已准备好`;
-  return <div className={`backup-progress ${status.phase}`} role="status" aria-live="polite"><div><span>{label}</span><strong>{collecting ? `${percentage}%` : status.phase === 'complete' ? '已完成' : status.phase === 'packing' ? '正在打包' : '正在保存'}</strong></div><div className="backup-progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} aria-valuetext={detail}><i className={`backup-progress-fill ${indeterminate ? 'indeterminate' : ''}`} style={indeterminate ? undefined : { width: `${percentage}%` }} /></div><small>{detail}</small></div>;
+  const copying = status.phase === 'collecting' || status.phase === 'copying';
+  const compressing = status.phase === 'packing' || status.phase === 'compressing';
+  const indeterminate = compressing || status.phase === 'saving' || status.phase === 'selecting' || status.phase === 'raw-complete';
+  const percentage = copying && status.total ? Math.round((status.bytesCompleted / Math.max(status.totalBytes, 1)) * 100) : status.phase === 'complete' || status.phase === 'raw-only' ? 100 : 0;
+  let label = '导出完成';
+  let detail = '';
+  let state = '已完成';
+  if (status.phase === 'selecting') { label = '请选择外部备份文件夹'; detail = 'Android 会先写入原始备份；压缩失败也不会丢失已完成的原始备份。'; state = '等待选择'; }
+  else if (status.phase === 'collecting') { label = `正在读取图片 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}`; state = `${percentage}%`; }
+  else if (status.phase === 'copying') { label = `正在复制原始备份 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 位置：${status.location}`; state = `${percentage}%`; }
+  else if (status.phase === 'raw-complete') { label = '原始备份已完成'; detail = `位置：${status.location}。现在开始在 Android 原生层生成 ZIP。`; state = '安全完成'; }
+  else if (status.phase === 'packing') { label = '正在生成 ZIP 备份'; detail = '正在把原图和信息写入备份包'; state = '正在打包'; }
+  else if (status.phase === 'compressing') { label = `正在生成 ZIP ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 原始备份：${status.location}`; state = status.total ? `${Math.round((status.bytesCompleted / Math.max(status.totalBytes, 1)) * 100)}%` : '正在压缩'; }
+  else if (status.phase === 'saving') { label = '正在保存备份文件'; detail = '正在写入你选择的位置'; state = '正在保存'; }
+  else if (status.phase === 'raw-only') { label = '原始备份成功，仅压缩失败'; detail = `备份位置：${status.location}。其中包含 manifest.json 和 images，可在文件管理器压缩为 ZIP 后恢复。${status.error}`; state = '请保留原始备份'; }
+  else if (status.phase === 'copy-failed') { label = '原始备份未完成'; detail = `已保留已写入的文件：${status.location}。${status.error}`; state = '导出失败'; }
+  else { detail = `${status.fileName} 已完成${status.location ? ` · 位置：${status.location}` : ''}`; }
+  return <div className={`backup-progress ${status.phase}`} role="status" aria-live="polite"><div><span>{label}</span><strong>{state}</strong></div><div className="backup-progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} aria-valuetext={detail}><i className={`backup-progress-fill ${indeterminate ? 'indeterminate' : ''}`} style={indeterminate ? undefined : { width: `${percentage}%` }} /></div><small>{detail}</small></div>;
 }
 
 function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) {
@@ -278,15 +313,35 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
   const create = async () => {
     const fileName = `xinyu-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`;
     setBusy(true);
-    setExportStatus({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
     try {
+      if (isAndroid) {
+        const result = await exportAndroidBackup(setExportStatus);
+        if (result.kind === 'cancelled') { setExportStatus(undefined); onNotify('已取消选择，备份未开始'); return; }
+        if (result.kind === 'raw-only') {
+          setExportStatus({ phase: 'raw-only', location: result.rawLocation, error: result.compressionError });
+          onNotify('原始备份成功，仅压缩失败；请保留原始备份文件夹');
+          return;
+        }
+        setExportStatus({ phase: 'complete', fileName: result.zipName, location: result.zipLocation });
+        onNotify('完整备份已导出，原始备份和 ZIP 都已保留');
+        return;
+      }
+      setExportStatus({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
       const blob = await exportLibrary(undefined, setExportStatus);
       setExportStatus({ phase: 'saving', fileName });
       const saved = await saveBlob(blob, fileName);
       if (!saved) { setExportStatus(undefined); onNotify('已取消导出，备份未保存'); return; }
       setExportStatus({ phase: 'complete', fileName });
-      onNotify(isAndroid ? '完整备份已生成，已打开系统保存/分享' : '完整备份已导出');
-    } catch (error) { setExportStatus(undefined); onNotify(error instanceof Error ? error.message : '备份失败'); }
+      onNotify('完整备份已导出');
+    } catch (error) {
+      if (error instanceof AndroidBackupCopyError) {
+        setExportStatus({ phase: 'copy-failed', location: error.location, error: error.message });
+        onNotify('原始备份未完成，已保留已写入文件');
+      } else {
+        setExportStatus(undefined);
+        onNotify(error instanceof Error ? error.message : '备份失败');
+      }
+    }
     finally { setBusy(false); }
   };
   const restore = async (file: File) => {
@@ -300,8 +355,8 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); }
     finally { setBusy(false); }
   };
-  const exportButtonText = busy ? exportStatus?.phase === 'collecting' ? '正在读取…' : exportStatus?.phase === 'packing' ? '正在打包…' : '正在保存…' : exportStatus?.phase === 'complete' ? '再次导出' : '导出';
-  return <Modal title="导入与同步" subtitle="心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。" onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>原图和所有标签、备注、收藏夹都会写进一个 ZIP。</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
+  const exportButtonText = busy ? exportStatus?.phase === 'selecting' ? '选择位置…' : exportStatus?.phase === 'collecting' || exportStatus?.phase === 'copying' ? '正在复制…' : exportStatus?.phase === 'packing' || exportStatus?.phase === 'compressing' ? '正在压缩…' : '正在保存…' : exportStatus?.phase === 'complete' || exportStatus?.phase === 'raw-only' ? '再次导出' : '导出';
+  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会先把原图和清单逐张写入你选择的外部文件夹，再生成 ZIP；ZIP 失败也会保留原始备份。' : '心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。'} onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>{isAndroid ? '先生成可保留的原始备份，再由原生层流式压缩为 ZIP。' : '原图和所有标签、备注、收藏夹都会写进一个 ZIP。'}</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
 }
 
 export default App;
