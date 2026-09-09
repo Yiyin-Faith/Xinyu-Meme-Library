@@ -17,7 +17,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         // The overlay permission page is a system Activity and does not always
         // deliver a useful result code. Keep a pending user request and finish
