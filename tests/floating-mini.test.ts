@@ -43,6 +43,10 @@ describe('floating mini library selection', () => {
     expect(selectFloatingMiniMemes(memes, { filter: 'tag', tag: '无语' }).map((item) => item.id)).toEqual(['used', 'also-used']);
   });
 
+  it('uses the frequent view when a caller omits a filter', () => {
+    expect(selectFloatingMiniMemes(memes, {}).map((item) => item.id)).toEqual(['used', 'also-used', 'new']);
+  });
+
   it('shows multiple accessibility matches as a deterministic local union', () => {
     expect(selectFloatingMiniMemes(memes, { filter: 'recommended', recommendedTags: ['猫猫', '开心'] }).map((item) => item.id)).toEqual(['also-used', 'new']);
   });

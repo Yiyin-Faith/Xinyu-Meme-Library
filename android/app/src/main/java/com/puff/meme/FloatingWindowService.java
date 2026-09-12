@@ -72,7 +72,6 @@ public class FloatingWindowService extends Service {
     private static final float DEFAULT_OPACITY = 0.82f;
     private static final float MIN_OPACITY = 0.30f;
     private static final int PAGE_SIZE = 24;
-    private static final String FILTER_RECENT = "recent";
     private static final String FILTER_FREQUENT = "frequent";
     private static final String FILTER_RECOMMENDED = "recommended";
     private static final String FILTER_TAG = "tag";
