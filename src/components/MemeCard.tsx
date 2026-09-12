@@ -6,8 +6,13 @@ import { isAndroid } from '../lib/platform';
 export function useBlobUrl(blob?: Blob) {
   const [url, setUrl] = useState('');
   useEffect(() => {
-    if (!blob) { setUrl(''); return; }
-    const next = URL.createObjectURL(blob); setUrl(next);
+    // A record that was never fully written (interrupted import, metadata-only
+    // restore, or an old library entry) may not carry a usable Blob. Calling
+    // createObjectURL on a non-Blob throws inside the effect and would take the
+    // whole grid down, so fail soft and let the card render its placeholder.
+    if (!(blob instanceof Blob) || blob.size === 0) { setUrl(''); return; }
+    const next = URL.createObjectURL(blob);
+    setUrl(next);
     return () => URL.revokeObjectURL(next);
   }, [blob]);
   return url;

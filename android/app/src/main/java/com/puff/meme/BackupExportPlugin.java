@@ -1,8 +1,13 @@
 package com.puff.meme;
 
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
@@ -36,6 +41,7 @@ import java.util.zip.ZipOutputStream;
 @CapacitorPlugin(name = "BackupExport")
 public class BackupExportPlugin extends Plugin {
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final String TASK_CHANNEL_ID = "xinyu-background-tasks";
     private static final Pattern BACKUP_FOLDER = Pattern.compile("xinyu-backup-[0-9-]{17}(?:-[0-9]{1,2})?");
     private static final Pattern IMAGE_PATH = Pattern.compile("images/[a-f0-9]{64}");
     private static final Pattern IMAGE_NAME = Pattern.compile("[a-f0-9]{64}");
@@ -214,6 +220,49 @@ public class BackupExportPlugin extends Plugin {
     protected void handleOnDestroy() {
         for (String writerId : writers.keySet()) {
             try { closeWriter(writerId); } catch (IOException ignored) { }
+        }
+    }
+
+    /**
+     * Posts a completion notification for a long background task (backup
+     * export, restore, batch import). Kept in this plugin so the app does not
+     * need an extra Capacitor dependency just to show one notification.
+     */
+    @PluginMethod
+    public void notify(PluginCall call) {
+        try {
+            String title = call.getString("title", "心语表情库");
+            String body = call.getString("body");
+            if (body == null || body.isEmpty()) {
+                call.resolve();
+                return;
+            }
+            NotificationManager manager = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager == null) throw new IOException("系统通知服务不可用");
+            // Android 13+ gates notifications behind a runtime permission.
+            // When it has not been granted the post is dropped; that is fine,
+            // the in-app task dock still shows the result.
+            if (!manager.areNotificationsEnabled()) {
+                call.resolve();
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(TASK_CHANNEL_ID, "后台任务", NotificationManager.IMPORTANCE_DEFAULT);
+                channel.setDescription("备份、恢复和批量导入完成后的提醒");
+                manager.createNotificationChannel(channel);
+            }
+            Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? new Notification.Builder(getContext(), TASK_CHANNEL_ID)
+                    : new Notification.Builder(getContext());
+            builder.setContentTitle(title)
+                    .setContentText(body)
+                    .setStyle(new Notification.BigTextStyle().bigText(body))
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setAutoCancel(true);
+            manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), builder.build());
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("无法发送通知：" + message(error), error);
         }
     }
 

@@ -128,6 +128,60 @@ export async function importImages(files: File[], options: ImportOptions | strin
   }
   return { added, skipped, errors };
 }
+export interface PrefilledImage {
+  blob: Blob;
+  title: string;
+  tags?: string[];
+  note?: string;
+  collectionId?: string;
+  favorite?: boolean;
+  source?: string;
+  createdAt?: number;
+  lastUsedAt?: number;
+  useCount?: number;
+}
+
+/**
+ * Batch import (merge) used by the folder/ZIP entry point. It reuses the same
+ * content-addressed de-duplication as `importImages`, but lets a 心语 manifest
+ * carry the name, tags, group and other migratable metadata of each image.
+ *
+ * This is deliberately *not* restore: it never deletes local records and never
+ * applies tombstones, so importing an old backup cannot silently remove images.
+ */
+export async function importPrefilledImages(items: PrefilledImage[], onProgress?: (completed: number, total: number) => void) {
+  let added = 0, skipped = 0;
+  const errors: string[] = [];
+  for (const [index, item] of items.entries()) {
+    try {
+      const meme = await prepareImage(item.blob, item.title || '未命名表情', item.collectionId ?? '', item.source ?? '本地导入');
+      meme.tags = normalizeTags(item.tags ?? []);
+      meme.note = (item.note ?? '').slice(0, 10000);
+      meme.favorite = Boolean(item.favorite);
+      if (item.createdAt) meme.createdAt = item.createdAt;
+      if (item.lastUsedAt) meme.lastUsedAt = item.lastUsedAt;
+      if (item.useCount) meme.useCount = item.useCount;
+      meme.updatedAt = Date.now();
+      await db.transaction('rw', db.memes, db.tombstones, async () => {
+        if (await db.memes.get(meme.id)) { skipped++; return; }
+        await db.memes.add(meme);
+        await db.tombstones.delete(meme.id);
+        added++;
+      });
+    } catch (error) { errors.push(`${item.title || '未命名图片'}: ${error instanceof Error ? error.message : '导入失败'}`); }
+    finally { onProgress?.(index + 1, items.length); }
+  }
+  return { added, skipped, errors };
+}
+
+/** Creates only the collections a manifest still needs; existing groups win. */
+export async function ensureCollections(collections: Collection[]) {
+  for (const collection of collections) {
+    if (await db.collections.get(collection.id)) continue;
+    await db.collections.put(collection);
+  }
+}
+
 export async function updateMeme(id: string, changes: Partial<Pick<Meme, 'title' | 'tags' | 'note' | 'collectionId' | 'favorite'>>) {
   await db.memes.update(id, { ...changes, updatedAt: Date.now() });
 }

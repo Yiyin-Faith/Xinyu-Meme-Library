@@ -1,4 +1,4 @@
-import { registerPlugin, type Plugin, type PluginListenerHandle } from '@capacitor/core';
+import { Capacitor, registerPlugin, type Plugin, type PluginListenerHandle } from '@capacitor/core';
 import { backupManifestText, commitBackupExportPlan, getBackupImage, type ReadyBackupExportPlan } from './backup';
 
 type NativeBackupDirectory = {
@@ -17,10 +17,25 @@ interface BackupExportPlugin extends Plugin {
   writeChunk(options: { writerId: string; data: string }): Promise<void>;
   closeFile(options: { writerId: string }): Promise<void>;
   compress(options: { treeUri: string; folderName: string; zipFileName: string }): Promise<NativeCompressedBackup>;
+  notify(options: { title: string; body: string }): Promise<void>;
 }
 
 const NativeBackupExport = registerPlugin<BackupExportPlugin>('BackupExport');
 const COPY_CHUNK_BYTES = 128 * 1024;
+
+/**
+ * Posts a completion notification so a long backup/import is visible in the
+ * notification shade after the app has been backgrounded. Best effort: a
+ * missing notification permission (Android 13+) must never fail a task.
+ */
+export async function notifyAndroidTask(title: string, body: string): Promise<void> {
+  if (Capacitor.getPlatform() !== 'android' || !body) return;
+  try {
+    await NativeBackupExport.notify({ title, body });
+  } catch {
+    // Notifications are optional; the in-app task dock is the source of truth.
+  }
+}
 
 export type AndroidBackupProgress =
   | { phase: 'selecting' }
