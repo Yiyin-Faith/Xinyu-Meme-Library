@@ -69,6 +69,13 @@ public class FloatingWindowService extends Service {
     private static final String PREFERENCE_OPACITY = "opacity";
     private static final String PREFERENCE_X = "position-x";
     private static final String PREFERENCE_Y = "position-y";
+    // Position is persisted as "which edge is it snapped to" plus "how far down
+    // the usable band is it, as a ratio". Absolute pixels would land the bubble
+    // somewhere else after a rotation, a DPI change or a system-bar inset change.
+    private static final String PREFERENCE_EDGE = "position-edge";
+    private static final String PREFERENCE_Y_RATIO = "position-y-ratio";
+    private static final String EDGE_LEFT = "left";
+    private static final String EDGE_RIGHT = "right";
     private static final float DEFAULT_OPACITY = 0.82f;
     private static final float MIN_OPACITY = 0.30f;
     private static final int PAGE_SIZE = 24;
@@ -248,12 +255,14 @@ public class FloatingWindowService extends Service {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         if (bubbleLayoutParams != null && bubble != null && windowManager != null) {
-            clampBubblePosition();
+            // Rebuild the position from the stored edge + ratio against the new
+            // screen metrics so a rotation or DPI change keeps the bubble where
+            // the user left it (relative to the screen) instead of off-screen.
+            restoreBubblePosition();
             try {
                 windowManager.updateViewLayout(bubble, bubbleLayoutParams);
             } catch (Exception ignored) {
             }
-            saveBubblePosition();
         }
         if (panelLayoutParams != null && panel != null && windowManager != null) {
             positionPanel(panelLayoutParams.width, panelLayoutParams.height);
@@ -290,9 +299,7 @@ public class FloatingWindowService extends Service {
             PixelFormat.TRANSLUCENT
         );
         bubbleLayoutParams.gravity = Gravity.TOP | Gravity.START;
-        bubbleLayoutParams.x = preferences(this).getInt(PREFERENCE_X, dp(12));
-        bubbleLayoutParams.y = preferences(this).getInt(PREFERENCE_Y, safeTop() + dp(136));
-        clampBubblePosition();
+        restoreBubblePosition();
         attachBubbleDrag(view);
         windowManager.addView(view, bubbleLayoutParams);
         bubble = view;
@@ -799,12 +806,6 @@ public class FloatingWindowService extends Service {
         }
     }
 
-    private void clampBubblePosition() {
-        if (bubbleLayoutParams == null) return;
-        bubbleLayoutParams.x = clampBubbleX(bubbleLayoutParams.x);
-        bubbleLayoutParams.y = clampBubbleY(bubbleLayoutParams.y);
-    }
-
     private int clampBubbleX(int value) {
         int width = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.width;
         int min = dp(8);
@@ -813,10 +814,71 @@ public class FloatingWindowService extends Service {
     }
 
     private int clampBubbleY(int value) {
+        return Math.max(minBubbleY(), Math.min(value, maxBubbleY()));
+    }
+
+    /** Lowest legal top edge for the bubble, below the status bar / cutout. */
+    private int minBubbleY() {
+        return safeTop() + dp(8);
+    }
+
+    /** Highest legal top edge for the bubble, above the navigation bar. */
+    private int maxBubbleY() {
         int height = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.height;
-        int min = safeTop() + dp(8);
-        int max = Math.max(min, screenHeight() - safeBottom() - height - dp(8));
-        return Math.max(min, Math.min(value, max));
+        int min = minBubbleY();
+        return Math.max(min, screenHeight() - safeBottom() - height - dp(8));
+    }
+
+    /** Where the bubble sits inside its legal band, 0 (top) to 1 (bottom). */
+    private double bubbleRatio(int y) {
+        int min = minBubbleY();
+        int max = maxBubbleY();
+        if (max <= min) return 0d;
+        return Math.max(0d, Math.min(1d, (y - min) / (double) (max - min)));
+    }
+
+    private int yForRatio(double ratio) {
+        int min = minBubbleY();
+        int max = maxBubbleY();
+        if (max <= min) return min;
+        double clamped = Math.max(0d, Math.min(1d, ratio));
+        return min + (int) Math.round(clamped * (max - min));
+    }
+
+    private boolean bubbleIsOnRight(int x) {
+        int width = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.width;
+        return x + width / 2 >= screenWidth() / 2;
+    }
+
+    /** Places the bubble on the given edge and relative height, clamped to the screen. */
+    private void applyBubblePosition(boolean onRight, double ratio) {
+        if (bubbleLayoutParams == null) return;
+        int min = dp(8);
+        int maxX = Math.max(min, screenWidth() - bubbleLayoutParams.width - dp(8));
+        bubbleLayoutParams.x = onRight ? maxX : min;
+        bubbleLayoutParams.y = clampBubbleY(yForRatio(ratio));
+    }
+
+    /**
+     * Restores the persisted edge + relative height. Falls back to the legacy
+     * absolute-pixel preference once, so an upgrade does not reset the bubble.
+     */
+    private void restoreBubblePosition() {
+        if (bubbleLayoutParams == null) return;
+        SharedPreferences prefs = preferences(this);
+        boolean onRight;
+        double ratio;
+        if (prefs.contains(PREFERENCE_EDGE)) {
+            onRight = EDGE_RIGHT.equals(prefs.getString(PREFERENCE_EDGE, EDGE_LEFT));
+            ratio = prefs.getFloat(PREFERENCE_Y_RATIO, (float) bubbleRatio(minBubbleY() + dp(128)));
+        } else if (prefs.contains(PREFERENCE_X) || prefs.contains(PREFERENCE_Y)) {
+            onRight = bubbleIsOnRight(prefs.getInt(PREFERENCE_X, dp(12)));
+            ratio = bubbleRatio(prefs.getInt(PREFERENCE_Y, minBubbleY() + dp(128)));
+        } else {
+            onRight = false;
+            ratio = bubbleRatio(minBubbleY() + dp(128));
+        }
+        applyBubblePosition(onRight, ratio);
     }
 
     private void positionPanel(int panelWidth, int panelHeight) {
@@ -832,9 +894,10 @@ public class FloatingWindowService extends Service {
 
     private void saveBubblePosition() {
         if (bubbleLayoutParams == null) return;
+        // Persist semantics, not pixels: the snapped edge plus a relative height.
         preferences(this).edit()
-            .putInt(PREFERENCE_X, bubbleLayoutParams.x)
-            .putInt(PREFERENCE_Y, bubbleLayoutParams.y)
+            .putString(PREFERENCE_EDGE, bubbleIsOnRight(bubbleLayoutParams.x) ? EDGE_RIGHT : EDGE_LEFT)
+            .putFloat(PREFERENCE_Y_RATIO, (float) bubbleRatio(bubbleLayoutParams.y))
             .apply();
     }
 
