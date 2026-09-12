@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  Archive, ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy,
+  Archive, ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Crop, RotateCcw, RotateCw,
   Download, FileImage, FolderPlus, Grid2X2, Heart, History, ImagePlus, Info, Keyboard, Layers3, Menu,
   MessageCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
 } from 'lucide-react';
 import type { Collection, Meme, OnlineMeme, Settings as PreferenceSettings, View } from './types';
 import MemeCard, { useBlobUrl } from './components/MemeCard';
 import Modal from './components/Modal';
-import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, importImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, updateMeme } from './lib/library';
-import { exportLibrary, mergeBackup, readBackup, type ExportProgress } from './lib/backup';
+import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, importImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, saveEditedMeme, updateMeme } from './lib/library';
+import { commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, readBackup, type BackupMode, type ExportProgress } from './lib/backup';
 import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
+import { canEditImage, clampCrop, editedDimensions, fullCrop, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
 import { fetchOnlineImage, searchOnline } from './lib/online';
 import { deliverAndroidFloatingMiniSnapshot, getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, syncAndroidFloatingMiniCatalog, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.5.5';
+const CURRENT_VERSION = '0.6.5';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -182,7 +183,7 @@ function App() {
       {primaryTab === 'library' && mobileNav && <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
       <main className="main-content">
         {primaryTab === 'community' ? <CommunityView posts={communityPosts} quota={uploadQuota} onLike={toggleCommunityLike} onOpenLibrary={() => setPrimaryTab('library')} /> : primaryTab === 'profile' ? <ProfileView profile={mockProfile} quota={uploadQuota} onOpenSync={() => { setPrimaryTab('library'); setView('sync'); }} onOpenSettings={() => { setPrimaryTab('library'); setView('settings'); }} /> : <>
-        <section className="page-head"><div><div className="eyebrow">{view === 'online' ? 'LOCAL FIRST · ONLINE EXTRA' : 'YOUR PERSONAL COLLECTION'}</div><h1>{currentTitle}<span className="title-count">{view === 'online' ? online.length : visibleMemes.length}</span></h1><p>{view === 'online' ? '先从本地找，想换个口味时再向在线图库借一张。无需收藏也能直接分享。' : view === 'all' ? '把常用的表达放在手边，复制、发送只需要一瞬间。' : view === 'sync' ? '用一个完整备份，在 Windows 与 Android 之间带走图片和所有元数据。' : '整理好自己的语气，下一次找到它会更快。'}</p></div><div className="page-head-actions">{(view === 'all' || view.startsWith('collection:') || view === 'favorites' || view === 'recent') && <button className={`glass-button ${selecting ? 'selected-mode' : ''}`} onClick={() => { setSelecting((s) => !s); setSelected(new Set()); }}><Check size={16} /> {selecting ? '完成选择' : '批量管理'}</button>}</div></section>
+        <section className="page-head"><div><div className="eyebrow">{view === 'online' ? 'LOCAL FIRST · ONLINE EXTRA' : 'YOUR PERSONAL COLLECTION'}</div><h1>{currentTitle}<span className="title-count">{view === 'online' ? online.length : visibleMemes.length}</span></h1><p>{view === 'online' ? '先从本地找，想换个口味时再向在线图库借一张。无需收藏也能直接分享。' : view === 'all' ? '把常用的表达放在手边，复制、发送只需要一瞬间。' : view === 'sync' ? '用完整或增量备份，在 Windows 与 Android 之间带走图片和所有元数据。' : '整理好自己的语气，下一次找到它会更快。'}</p></div><div className="page-head-actions">{(view === 'all' || view.startsWith('collection:') || view === 'favorites' || view === 'recent') && <button className={`glass-button ${selecting ? 'selected-mode' : ''}`} onClick={() => { setSelecting((s) => !s); setSelected(new Set()); }}><Check size={16} /> {selecting ? '完成选择' : '批量管理'}</button>}</div></section>
         <div className="search-row"><label className="search-box glass"><Search size={19} /><input id="global-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={view === 'online' ? '搜一张想用的表情，例如：猫猫 开心' : '搜索标题、标签、备注…'} /><kbd>⌘ K</kbd>{search && <button className="clear-search" aria-label="清空搜索" onClick={() => setSearch('')}><X size={15} /></button>}</label><span className="search-tip"><Keyboard size={14} /> 支持多个关键词</span></div>
         {(view === 'all' || view === 'favorites' || view === 'recent' || view.startsWith('collection:')) && <TagShortcuts tags={tags} activeTag={tagFilter} onSelect={(tag) => setTagFilter((current) => current === tag ? '' : tag)} />}
         {tagFilter && <div className="filter-chip"><Tag size={14} /> #{tagFilter}<button aria-label="移除标签筛选" onClick={() => setTagFilter('')}><X size={13} /></button></div>}
@@ -247,7 +248,7 @@ function EmptyState({ search, view, onAdd, onOnline }: { search: string; view: V
 function OnlineView({ items, loading, error, onRetry, onUse, onSave }: { items: OnlineMeme[]; loading: boolean; error: string; onRetry: () => void; onUse: (item: OnlineMeme) => void; onSave: (item: OnlineMeme) => void }) { return <div className="online-view"><div className="online-callout glass"><Sparkles size={18} /><span><strong>在线补充</strong> · 结果来自 Memegen，搜索只读取公开的模板清单；使用时才加载原图。</span><Cloud size={17} /></div>{loading ? <div className="inline-loading"><span className="spinner" />正在找适合你的表达…</div> : error ? <div className="error-state glass"><CloudOff size={22} /><strong>{error}</strong><button className="glass-button" onClick={onRetry}>重新连接</button></div> : items.length ? <div className="online-grid">{items.map((item) => <OnlineCard key={item.id} item={item} onUse={() => onUse(item)} onSave={() => onSave(item)} />)}</div> : <div className="empty-state glass"><div className="empty-icon"><Sparkles size={27} /></div><h2>换一个关键词试试</h2><p>例如：cat、happy、work，或直接输入中文。</p></div>}</div>; }
 function OnlineCard({ item, onUse, onSave }: { item: OnlineMeme; onUse: () => void; onSave: () => void }) { return <article className="online-card glass"><div className="online-image"><img src={item.url} alt={item.title} loading="lazy" /></div><div className="online-card-footer"><span>{item.title}</span><div><button className="mini-action" title="直接分享" onClick={onUse}><Share2 size={15} /></button><button className="mini-action" title="保存到本地" onClick={onSave}><Download size={15} /></button></div></div></article>; }
 
-function SyncView({ onImport, onImportFiles, onBackup }: { onImport: () => void; onImportFiles: (files: File[]) => void; onBackup: () => void }) { const [drag, setDrag] = useState(false); const onDrop = (event: React.DragEvent) => { event.preventDefault(); setDrag(false); const files = [...event.dataTransfer.files].filter((file) => file.type.startsWith('image/') || /\.(avif|svg)$/i.test(file.name)); if (files.length) onImportFiles(files); }; return <div className="sync-view"><div className={`drop-zone glass ${drag ? 'dragging' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={onDrop}><div className="drop-icon"><Upload size={29} /></div><h2>把图片放到这里</h2><p>支持 PNG、JPG、GIF、WebP、AVIF 和 SVG，单张最大 32 MB</p><button className="primary-button" onClick={onImport}><ImagePlus size={17} /> 选择图片</button></div><div className="sync-cards"><button className="sync-card glass" onClick={onBackup}><div className="sync-card-icon"><Archive size={21} /></div><div><strong>完整备份</strong><span>原图、标签、备注、收藏夹一次带走</span></div><ChevronRight size={18} /></button><button className="sync-card glass" onClick={onBackup}><div className="sync-card-icon"><ArrowDownToLine size={21} /></div><div><strong>从备份恢复</strong><span>自动合并较新的修改，保留本机内容</span></div><ChevronRight size={18} /></button></div></div>; }
+function SyncView({ onImport, onImportFiles, onBackup }: { onImport: () => void; onImportFiles: (files: File[]) => void; onBackup: () => void }) { const [drag, setDrag] = useState(false); const onDrop = (event: React.DragEvent) => { event.preventDefault(); setDrag(false); const files = [...event.dataTransfer.files].filter((file) => file.type.startsWith('image/') || /\.(avif|svg)$/i.test(file.name)); if (files.length) onImportFiles(files); }; return <div className="sync-view"><div className={`drop-zone glass ${drag ? 'dragging' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={onDrop}><div className="drop-icon"><Upload size={29} /></div><h2>把图片放到这里</h2><p>支持 PNG、JPG、GIF、WebP、AVIF 和 SVG，单张最大 32 MB</p><button className="primary-button" onClick={onImport}><ImagePlus size={17} /> 选择图片</button></div><div className="sync-cards"><button className="sync-card glass" onClick={onBackup}><div className="sync-card-icon"><Archive size={21} /></div><div><strong>备份导出</strong><span>选择完整或增量，带走图片和所有信息</span></div><ChevronRight size={18} /></button><button className="sync-card glass" onClick={onBackup}><div className="sync-card-icon"><ArrowDownToLine size={21} /></div><div><strong>从备份恢复</strong><span>自动合并较新的修改，保留本机内容</span></div><ChevronRight size={18} /></button></div></div>; }
 
 function TagsView({ tags, onSelect }: { tags: [string, number][]; onSelect: (tag: string) => void }) { return <div className="tags-view glass"><div className="tag-cloud">{tags.map(([tag, count]) => <button key={tag} className="tag-pill" onClick={() => onSelect(tag)}><Tag size={14} />#{tag}<em>{count}</em></button>)}</div>{!tags.length && <div className="empty-inline"><Tag size={22} />导入表情后，这里会出现你的标签。</div>}</div>; }
 
@@ -374,6 +375,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.6.5</strong><ul><li>备份导出支持完整与增量：以最近一次有效 manifest 为基准，只写新增原图与变化的元数据、收藏夹和删除记录；无变化时不会生成空备份。</li><li>导出进度会基于平滑后的实际处理速度显示预计剩余时间；Android 原始备份写完 manifest 后即成为有效基准，ZIP 失败也不影响。</li><li>PNG、JPG 和 WebP 可在本机进行基础裁切与 90° 旋转，支持覆盖原图或另存为；GIF、SVG 和 AVIF 保持原格式，不会被扁平化。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.5</strong><ul><li>修复 Android 输入关键词推荐打开无障碍设置时的回调报错：设置页不再依赖不稳定的 Activity 返回结果，回到心语后会读取实际授权状态并自动同步开关。</li><li>迷你表情库只保留搜索、常用和现有标签；自动推荐仍仅在命中你自己的标签时触发，不提供单独的推荐页。</li><li>超长图片文件名现在会自动换行；即使没有空格也不会横向溢出。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.4</strong><ul><li>修复 Android 迷你表情库与主图库不同步的问题：当前 IndexedDB 页面通过原生回调交付，服务重启后仍可用私有元数据与按页缩略图恢复。</li><li>迷你表情库精简为搜索、常用、标签和图片网格；展开面板保持清晰不透明，悬浮球透明度仍可单独调节。</li><li>输入关键词推荐改用心语风格的隐私说明；确认前有 1 秒防误触，并优先跳转到对应无障碍服务设置、返回后自动同步授权状态。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.3</strong><ul><li>Android 悬浮球升级为迷你表情库：可按最近、常用和现有标签筛选，按需加载缩略图并直接分享同一份本地原图。</li><li>新增可选的“输入关键词自动推荐表情”：无障碍输入仅在本机临时匹配自己的标签，支持完全匹配和包含关键词。</li><li>悬浮球支持边缘吸附、位置恢复和安全区域避让；悬浮权限或无障碍权限撤销后会安全停止。</li></ul></section>
@@ -398,7 +400,81 @@ function ManageModal({ meme, onClose, onEdit, onDelete }: { meme: Meme; onClose:
   return <Modal title="管理表情" subtitle="长按图片会打开这里；删除已放到一级操作。" onClose={onClose}><div className="manage-modal"><div className="manage-meme"><img src={url} alt={meme.title} /><div><strong>{meme.title}</strong><span>{meme.tags.length ? meme.tags.slice(0, 3).map((tag) => `#${tag}`).join(' · ') : '未添加标签'}</span></div></div><div className="manage-actions"><button className="manage-action" onClick={onEdit}><span className="manage-action-icon"><Pencil size={18} /></span><span><strong>编辑名称、分组和标签</strong><small>修改这张图片的归类和说明</small></span><ChevronRight size={17} /></button><button className="manage-action danger" onClick={() => { void onDelete(); }}><span className="manage-action-icon"><Trash2 size={18} /></span><span><strong>删除图片</strong><small>从当前设备的图片库移除</small></span></button></div></div></Modal>;
 }
 
-function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme; collections: Collection[]; onClose: () => void; onNotify: (message: string) => void; onUse: () => void }) { const [title, setTitle] = useState(meme.title); const [note, setNote] = useState(meme.note); const [tags, setTags] = useState(meme.tags.join('，')); const [collectionId, setCollectionId] = useState(meme.collectionId); const url = useBlobUrl(meme.blob); const save = async () => { await updateMeme(meme.id, { title: title.trim() || '未命名表情', note, tags: normalizeTags(tags.split(/[，,\s]+/)), collectionId }); onNotify('表情信息已保存'); onClose(); }; return <Modal title="编辑表情" subtitle="给它一个更容易被找到的语气。" onClose={onClose}><div className="edit-layout"><div className="edit-preview"><img src={url} alt={meme.title} /></div><div className="edit-fields"><label>标题<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></label><label>标签<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="例如：开心 反应 朋友" /></label><label>收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label><div className="edit-actions"><span /><button className="glass-button" onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" onClick={save}><Check size={16} /> 保存</button></div></div></div></Modal>; }
+function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme; collections: Collection[]; onClose: () => void; onNotify: (message: string) => void; onUse: () => void }) {
+  const [title, setTitle] = useState(meme.title);
+  const [note, setNote] = useState(meme.note);
+  const [tags, setTags] = useState(meme.tags.join('，'));
+  const [collectionId, setCollectionId] = useState(meme.collectionId);
+  const [crop, setCrop] = useState<CropRect>(() => fullCrop(meme.width, meme.height));
+  const [rotation, setRotation] = useState(0);
+  const [editPreview, setEditPreview] = useState('');
+  const [editing, setEditing] = useState(false);
+  const url = useBlobUrl(meme.blob);
+  const editable = canEditImage(meme.mime);
+  const output = editedDimensions(crop, rotation);
+  const changes = { title: title.trim() || '未命名表情', note, tags: normalizeTags(tags.split(/[，,\s]+/)), collectionId };
+
+  useEffect(() => {
+    if (!editable) return;
+    let active = true;
+    let previewUrl = '';
+    void renderEditedPreview(meme.blob, crop, rotation).then((image) => {
+      previewUrl = URL.createObjectURL(image);
+      if (active) setEditPreview(previewUrl);
+      else URL.revokeObjectURL(previewUrl);
+    }).catch(() => undefined);
+    return () => { active = false; if (previewUrl) URL.revokeObjectURL(previewUrl); };
+  }, [editable, meme.blob, crop.x, crop.y, crop.width, crop.height, rotation]);
+
+  const changeCrop = (field: keyof CropRect, value: string) => {
+    const number = Number(value);
+    setCrop((current) => clampCrop({ ...current, [field]: Number.isFinite(number) ? number : current[field] }, meme.width, meme.height));
+  };
+  const save = async () => {
+    try {
+      await updateMeme(meme.id, changes);
+      onNotify('表情信息已保存');
+      onClose();
+    } catch (error) { onNotify(error instanceof Error ? error.message : '保存失败'); }
+  };
+  const saveEdited = async (mode: 'replace' | 'copy') => {
+    if (!editable) return;
+    setEditing(true);
+    try {
+      if (crop.x === 0 && crop.y === 0 && crop.width === meme.width && crop.height === meme.height && rotation % 360 === 0) {
+        await updateMeme(meme.id, changes);
+        onNotify('图片没有发生变化，已保存名称、标签和分组');
+        onClose();
+        return;
+      }
+      const image = await renderEditedImage(meme.blob, crop, rotation);
+      // The image save reads the record again, so its metadata stays aligned
+      // with the fields the user has just edited in this modal.
+      await updateMeme(meme.id, changes);
+      const result = await saveEditedMeme(meme.id, image, mode);
+      if (result === 'unchanged') { onNotify('图片没有发生变化，已保存名称、标签和分组'); onClose(); return; }
+      if (result === 'already-exists') { onNotify('相同的编辑结果已在图库中，已保存信息修改'); onClose(); return; }
+      onNotify(result === 'replaced' ? '已覆盖原图并保留删除记录' : '已另存为一张新图片');
+      onClose();
+    } catch (error) { onNotify(error instanceof Error ? error.message : '保存编辑结果失败'); }
+    finally { setEditing(false); }
+  };
+
+  return <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" onClose={editing ? () => undefined : onClose}>
+    <div className="edit-layout">
+      <div className="edit-preview edit-preview-result"><img src={editPreview || url} alt={meme.title} /></div>
+      <div className="edit-fields">
+        <label>标题<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></label>
+        <label>标签<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="例如：开心 反应 朋友" /></label>
+        <label>收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label>
+        {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button></div><div className="crop-fields"><label>X<input inputMode="numeric" type="number" min="0" max={meme.width - 1} value={crop.x} onChange={(event) => changeCrop('x', event.target.value)} /></label><label>Y<input inputMode="numeric" type="number" min="0" max={meme.height - 1} value={crop.y} onChange={(event) => changeCrop('y', event.target.value)} /></label><label>宽<input inputMode="numeric" type="number" min="1" max={meme.width} value={crop.width} onChange={(event) => changeCrop('width', event.target.value)} /></label><label>高<input inputMode="numeric" type="number" min="1" max={meme.height} value={crop.height} onChange={(event) => changeCrop('height', event.target.value)} /></label></div><button type="button" className="text-button" onClick={() => { setCrop(fullCrop(meme.width, meme.height)); setRotation(0); }}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
+        <div className="edit-actions"><span /><button className="glass-button" disabled={editing} onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" disabled={editing} onClick={() => { void save(); }}><Check size={16} /> 保存信息</button></div>
+        {editable && <div className="image-save-actions"><button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={() => { void saveEdited('replace'); }}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
+      </div>
+    </div>
+  </Modal>;
+}
 
 function ImportModal({ collections, initialFiles, onClose, onNotify }: { collections: Collection[]; initialFiles: File[]; onClose: () => void; onNotify: (message: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
@@ -417,24 +493,67 @@ function ImportModal({ collections, initialFiles, onClose, onNotify }: { collect
 
 type BackupStatus = ExportProgress | AndroidBackupProgress
   | { phase: 'saving' | 'complete'; fileName: string; location?: string }
+  | { phase: 'raw'; location: string }
   | { phase: 'raw-only'; location: string; error: string }
   | { phase: 'copy-failed'; location: string; error: string };
 
+function formatEta(milliseconds: number) {
+  const seconds = Math.max(1, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `预计剩余 ${seconds} 秒`;
+  return `预计剩余 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+function useBackupEta(status: BackupStatus) {
+  const stats = useRef<{ phase: string; startedAt: number; sampledAt: number; sampledWork: number; speed: number; samples: number } | undefined>(undefined);
+  const [eta, setEta] = useState('');
+  useEffect(() => {
+    const measurable = status.phase === 'collecting' || status.phase === 'copying' || status.phase === 'compressing';
+    if (!measurable) {
+      stats.current = undefined;
+      setEta((previous) => previous ? '' : previous);
+      return;
+    }
+    const total = status.totalBytes > 0 ? status.totalBytes : status.total;
+    const completed = status.totalBytes > 0 ? status.bytesCompleted : status.completed;
+    if (!total || completed >= total) { setEta((previous) => previous ? '' : previous); return; }
+    const now = performance.now();
+    const previous = stats.current;
+    if (!previous || previous.phase !== status.phase || completed < previous.sampledWork) {
+      stats.current = { phase: status.phase, startedAt: now, sampledAt: now, sampledWork: completed, speed: 0, samples: 0 };
+      setEta((value) => value ? '' : value);
+      return;
+    }
+    const elapsed = now - previous.sampledAt;
+    const worked = completed - previous.sampledWork;
+    if (worked <= 0 || elapsed < 350) return;
+    const instantSpeed = worked / elapsed;
+    const speed = previous.samples ? previous.speed * 0.75 + instantSpeed * 0.25 : instantSpeed;
+    const next = { ...previous, sampledAt: now, sampledWork: completed, speed, samples: previous.samples + 1 };
+    stats.current = next;
+    if (next.samples < 2 || now - next.startedAt < 650 || !speed) return;
+    const estimate = (total - completed) / speed;
+    setEta(formatEta(estimate));
+  }, [status]);
+  return eta;
+}
+
 function BackupProgressPanel({ status }: { status: BackupStatus }) {
   const copying = status.phase === 'collecting' || status.phase === 'copying';
-  const compressing = status.phase === 'packing' || status.phase === 'compressing';
-  const indeterminate = compressing || status.phase === 'saving' || status.phase === 'selecting' || status.phase === 'raw-complete';
-  const percentage = copying && status.total ? Math.round((status.bytesCompleted / Math.max(status.totalBytes, 1)) * 100) : status.phase === 'complete' || status.phase === 'raw-only' ? 100 : 0;
+  const compressing = status.phase === 'compressing';
+  const indeterminate = status.phase === 'packing' || status.phase === 'saving' || status.phase === 'selecting' || status.phase === 'raw-complete';
+  const percentage = (copying || compressing) && (status.totalBytes || status.total) ? Math.round(((status.totalBytes ? status.bytesCompleted / status.totalBytes : status.completed / Math.max(status.total, 1))) * 100) : status.phase === 'complete' || status.phase === 'raw' || status.phase === 'raw-only' ? 100 : 0;
+  const eta = useBackupEta(status);
   let label = '导出完成';
   let detail = '';
   let state = '已完成';
   if (status.phase === 'selecting') { label = '请选择外部备份文件夹'; detail = 'Android 会先写入原始备份；压缩失败也不会丢失已完成的原始备份。'; state = '等待选择'; }
-  else if (status.phase === 'collecting') { label = `正在读取图片 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}`; state = `${percentage}%`; }
-  else if (status.phase === 'copying') { label = `正在复制原始备份 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 位置：${status.location}`; state = `${percentage}%`; }
+  else if (status.phase === 'collecting') { label = `正在读取图片 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''}`; state = `${percentage}%`; }
+  else if (status.phase === 'copying') { label = `正在复制原始备份 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''} · 位置：${status.location}`; state = `${percentage}%`; }
   else if (status.phase === 'raw-complete') { label = '原始备份已完成'; detail = `位置：${status.location}。现在开始在 Android 原生层生成 ZIP。`; state = '安全完成'; }
   else if (status.phase === 'packing') { label = '正在生成 ZIP 备份'; detail = '正在把原图和信息写入备份包'; state = '正在打包'; }
-  else if (status.phase === 'compressing') { label = `正在生成 ZIP ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 原始备份：${status.location}`; state = status.total ? `${Math.round((status.bytesCompleted / Math.max(status.totalBytes, 1)) * 100)}%` : '正在压缩'; }
+  else if (status.phase === 'compressing') { label = `正在生成 ZIP ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''} · 原始备份：${status.location}`; state = `${percentage}%`; }
   else if (status.phase === 'saving') { label = '正在保存备份文件'; detail = '正在写入你选择的位置'; state = '正在保存'; }
+  else if (status.phase === 'raw') { label = '原始备份已完成'; detail = `备份位置：${status.location}。其中包含 manifest.json 和 images；未选择打包 ZIP。`; state = '已完成'; }
   else if (status.phase === 'raw-only') { label = '原始备份成功，仅压缩失败'; detail = `备份位置：${status.location}。其中包含 manifest.json 和 images，可在文件管理器压缩为 ZIP 后恢复。${status.error}`; state = '请保留原始备份'; }
   else if (status.phase === 'copy-failed') { label = '原始备份未完成'; detail = `已保留已写入的文件：${status.location}。${status.error}`; state = '导出失败'; }
   else { detail = `${status.fileName} 已完成${status.location ? ` · 位置：${status.location}` : ''}`; }
@@ -444,32 +563,45 @@ function BackupProgressPanel({ status }: { status: BackupStatus }) {
 function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [backupMode, setBackupMode] = useState<BackupMode>('full');
+  const [packZip, setPackZip] = useState(true);
   const [deletions, setDeletions] = useState(true);
   const [restoreSettings, setRestoreSettings] = useState(false);
   const [exportStatus, setExportStatus] = useState<BackupStatus>();
+  const baseline = useLiveQuery(() => db.backupBaselines.get('latest'), []);
+  const canIncremental = Boolean(baseline);
   const create = async () => {
-    const fileName = `xinyu-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`;
+    const plan = await createBackupExportPlan(backupMode);
+    if (plan.status === 'missing-baseline') { onNotify('请先执行一次完整备份'); setBackupMode('full'); return; }
+    if (plan.status === 'no-changes') { onNotify('自上次备份以来没有需要导出的变化'); return; }
+    const fileName = `xinyu-${backupMode}-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`;
     setBusy(true);
     try {
       if (isAndroid) {
-        const result = await exportAndroidBackup(setExportStatus);
+        const result = await exportAndroidBackup(plan, setExportStatus, packZip);
         if (result.kind === 'cancelled') { setExportStatus(undefined); onNotify('已取消选择，备份未开始'); return; }
+        if (result.kind === 'raw') {
+          setExportStatus({ phase: 'raw', location: result.rawLocation });
+          onNotify(`${backupMode === 'full' ? '完整' : '增量'}原始备份已导出`);
+          return;
+        }
         if (result.kind === 'raw-only') {
           setExportStatus({ phase: 'raw-only', location: result.rawLocation, error: result.compressionError });
           onNotify('原始备份成功，仅压缩失败；请保留原始备份文件夹');
           return;
         }
         setExportStatus({ phase: 'complete', fileName: result.zipName, location: result.zipLocation });
-        onNotify('完整备份已导出，原始备份和 ZIP 都已保留');
+        onNotify(`${backupMode === 'full' ? '完整' : '增量'}备份已导出，原始备份和 ZIP 都已保留`);
         return;
       }
       setExportStatus({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
-      const blob = await exportLibrary(undefined, setExportStatus);
+      const blob = await exportBackupPlan(plan, undefined, setExportStatus);
       setExportStatus({ phase: 'saving', fileName });
       const saved = await saveBlob(blob, fileName);
       if (!saved) { setExportStatus(undefined); onNotify('已取消导出，备份未保存'); return; }
+      await commitBackupExportPlan(plan);
       setExportStatus({ phase: 'complete', fileName });
-      onNotify('完整备份已导出');
+      onNotify(`${backupMode === 'full' ? '完整' : '增量'}备份已导出`);
     } catch (error) {
       if (error instanceof AndroidBackupCopyError) {
         setExportStatus({ phase: 'copy-failed', location: error.location, error: error.message });
@@ -492,8 +624,8 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); }
     finally { setBusy(false); }
   };
-  const exportButtonText = busy ? exportStatus?.phase === 'selecting' ? '选择位置…' : exportStatus?.phase === 'collecting' || exportStatus?.phase === 'copying' ? '正在复制…' : exportStatus?.phase === 'packing' || exportStatus?.phase === 'compressing' ? '正在压缩…' : '正在保存…' : exportStatus?.phase === 'complete' || exportStatus?.phase === 'raw-only' ? '再次导出' : '导出';
-  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会先把原图和清单逐张写入你选择的外部文件夹，再生成 ZIP；ZIP 失败也会保留原始备份。' : '心语表情库备份（.puff.zip）是跨 Windows 和 Android 的完整离线备份格式。'} onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div><strong>导出完整备份</strong><span>{isAndroid ? '先生成可保留的原始备份，再由原生层流式压缩为 ZIP。' : '原图和所有标签、备注、收藏夹都会写进一个 ZIP。'}</span></div><button className="primary-button" disabled={busy} onClick={create}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库，不会覆盖较新的本地修改。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
+  const exportButtonText = busy ? exportStatus?.phase === 'selecting' ? '选择位置…' : exportStatus?.phase === 'collecting' || exportStatus?.phase === 'copying' ? '正在复制…' : exportStatus?.phase === 'packing' || exportStatus?.phase === 'compressing' ? '正在压缩…' : '正在保存…' : exportStatus?.phase === 'complete' || exportStatus?.phase === 'raw' || exportStatus?.phase === 'raw-only' ? '再次导出' : '导出';
+  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会继续逐张写入外部备份目录；ZIP 压缩失败时原始备份与增量基准仍然有效。' : '完整或增量 .puff.zip 都可跨 Windows 和 Android 恢复。'} onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div className="backup-export-content"><strong>导出备份</strong><span>{backupMode === 'full' ? '完整导出当前图库及 manifest。' : '只导出上次有效备份后的新增、变化和删除记录。'}</span><div className="backup-type-choice" role="radiogroup" aria-label="备份类型"><label className={backupMode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" checked={backupMode === 'full'} disabled={busy} onChange={() => setBackupMode('full')} />完整备份</label><label className={`${backupMode === 'incremental' ? 'selected' : ''} ${canIncremental ? '' : 'disabled'}`}><input type="radio" name="backup-mode" checked={backupMode === 'incremental'} disabled={busy || !canIncremental} onChange={() => setBackupMode('incremental')} />增量备份</label></div><small className="backup-baseline-note">{canIncremental ? '以最近一次成功写入的 manifest 为基准。' : '请先执行一次完整备份，才能使用增量备份。'}</small><label className={`backup-zip-choice ${!isAndroid ? 'disabled' : ''}`}><input type="checkbox" checked={packZip} disabled={busy || !isAndroid} onChange={(event) => setPackZip(event.target.checked)} />打包 ZIP {!isAndroid && <small>（此平台仅支持 ZIP）</small>}</label></div><button className="primary-button" disabled={busy} onClick={() => { void create(); }}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库；增量备份需要先恢复它所依赖的完整备份。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
 }
 
 export default App;

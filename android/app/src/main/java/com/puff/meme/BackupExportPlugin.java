@@ -171,8 +171,11 @@ public class BackupExportPlugin extends Plugin {
             DocumentFile backupFolder = backupFolder(treeUri, folderName);
             DocumentFile manifest = backupFolder.findFile("manifest.json");
             DocumentFile images = backupFolder.findFile("images");
-            if (manifest == null || !manifest.isFile() || images == null || !images.isDirectory()) throw new IOException("原始备份不完整，未开始压缩");
-            DocumentFile[] imageFiles = images.listFiles();
+            if (manifest == null || !manifest.isFile()) throw new IOException("原始备份不完整，未开始压缩");
+            // Metadata-only incremental backups intentionally have no images
+            // directory. A manifest by itself is still a valid ZIP backup.
+            if (images != null && !images.isDirectory()) throw new IOException("原始备份图片目录不正确");
+            DocumentFile[] imageFiles = images == null ? new DocumentFile[0] : images.listFiles();
             long totalBytes = manifest.length();
             for (DocumentFile image : imageFiles) {
                 String name = image.getName();
