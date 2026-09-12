@@ -1,7 +1,9 @@
 import type { Meme } from '../types';
 import { db, markUsed, matchesSearch } from './library';
 
-export type FloatingMiniFilter = 'recent' | 'frequent' | 'recommended' | 'tag' | 'all';
+// "recommended" is only the automatic accessibility-triggered view. The
+// visible mini-library controls remain search, frequent, and existing tags.
+export type FloatingMiniFilter = 'frequent' | 'recommended' | 'tag' | 'all';
 export type FloatingMiniRequest = {
   search?: string;
   filter?: FloatingMiniFilter;
@@ -71,7 +73,7 @@ export function floatingMiniCatalog(memes: Meme[]): FloatingMiniCatalogEntry[] {
 /** Pure selection against the existing in-memory IndexedDB records. */
 export function selectFloatingMiniMemes(memes: Meme[], request: FloatingMiniRequest) {
   const search = request.search?.trim() ?? '';
-  const filter = request.filter ?? 'recent';
+  const filter = request.filter ?? 'frequent';
   const selectedTag = normalize(request.tag ?? '');
   const recommended = new Set((request.recommendedTags ?? []).map(normalize).filter(Boolean));
   let selected = memes.filter((meme) => {
@@ -81,12 +83,7 @@ export function selectFloatingMiniMemes(memes: Meme[], request: FloatingMiniRequ
     return true;
   });
 
-  if (filter === 'recent') {
-    const used = selected.filter((meme) => meme.lastUsedAt > 0);
-    // A fresh library should still be usable from the floating panel.
-    selected = used.length ? used : selected;
-    selected.sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.createdAt - a.createdAt);
-  } else if (filter === 'frequent') {
+  if (filter === 'frequent') {
     selected.sort((a, b) => b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt || b.createdAt - a.createdAt);
   } else {
     selected.sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.useCount - a.useCount || b.createdAt - a.createdAt);

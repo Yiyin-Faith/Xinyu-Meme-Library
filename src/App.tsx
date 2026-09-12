@@ -17,7 +17,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.5.4';
+const CURRENT_VERSION = '0.5.5';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -374,6 +374,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.5.5</strong><ul><li>修复 Android 输入关键词推荐打开无障碍设置时的回调报错：设置页不再依赖不稳定的 Activity 返回结果，回到心语后会读取实际授权状态并自动同步开关。</li><li>迷你表情库只保留搜索、常用和现有标签；自动推荐仍仅在命中你自己的标签时触发，不提供单独的推荐页。</li><li>超长图片文件名现在会自动换行；即使没有空格也不会横向溢出。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.4</strong><ul><li>修复 Android 迷你表情库与主图库不同步的问题：当前 IndexedDB 页面通过原生回调交付，服务重启后仍可用私有元数据与按页缩略图恢复。</li><li>迷你表情库精简为搜索、常用、标签和图片网格；展开面板保持清晰不透明，悬浮球透明度仍可单独调节。</li><li>输入关键词推荐改用心语风格的隐私说明；确认前有 1 秒防误触，并优先跳转到对应无障碍服务设置、返回后自动同步授权状态。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.3</strong><ul><li>Android 悬浮球升级为迷你表情库：可按最近、常用和现有标签筛选，按需加载缩略图并直接分享同一份本地原图。</li><li>新增可选的“输入关键词自动推荐表情”：无障碍输入仅在本机临时匹配自己的标签，支持完全匹配和包含关键词。</li><li>悬浮球支持边缘吸附、位置恢复和安全区域避让；悬浮权限或无障碍权限撤销后会安全停止。</li></ul></section>
           <section className="changelog-entry"><strong>v0.4.3</strong><ul><li>修复手机侧边导航中设置被底栏遮挡的问题，长列表可独立滚动。</li><li>Android 图片库与分享临时文件保持在应用私有范围，升级时会为旧应用专属目录补上媒体隔离标记。</li><li>补全 Android 悬浮窗的权限恢复、后台保持、位置记忆和透明度调节。</li><li>Windows 程序补齐图标、产品版本信息及文件签名。</li></ul></section>

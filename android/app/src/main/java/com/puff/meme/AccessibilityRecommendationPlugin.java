@@ -4,14 +4,11 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.provider.Settings;
 
-import androidx.activity.result.ActivityResult;
-
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
-import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.util.ArrayList;
@@ -40,13 +37,6 @@ public class AccessibilityRecommendationPlugin extends Plugin {
         }
         if (enableAfterGrant) MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), true);
         openAccessibilitySettings(call);
-    }
-
-    @ActivityCallback
-    private void accessibilityPermissionResult(PluginCall call, ActivityResult result) {
-        if (call == null) return;
-        MemeRecommendationPreferences.completePendingRequest(getContext());
-        call.resolve(status());
     }
 
     @PluginMethod
@@ -95,23 +85,36 @@ public class AccessibilityRecommendationPlugin extends Plugin {
         ComponentName service = new ComponentName(getContext(), MemeRecommendationAccessibilityService.class);
         Intent details = new Intent(ACTION_ACCESSIBILITY_DETAILS_SETTINGS);
         details.putExtra(Intent.EXTRA_COMPONENT_NAME, service.flattenToString());
-        try {
-            if (details.resolveActivity(getContext().getPackageManager()) != null) {
-                startActivityForResult(call, details, "accessibilityRecommendationPermissionResult");
-                return;
-            }
-        } catch (Exception ignored) {
-            // Fall through to the documented generic settings page.
+        if (launchSettings(details)) {
+            call.resolve(status());
+            return;
         }
         Intent settings = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
         // This hint is ignored safely on Android versions that do not support
         // pre-selecting an accessibility service.
         settings.putExtra(Intent.EXTRA_COMPONENT_NAME, service.flattenToString());
+        if (launchSettings(settings)) {
+            call.resolve(status());
+            return;
+        }
+        MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), false);
+        call.reject("无法打开 Android 无障碍设置");
+    }
+
+    /**
+     * Android's accessibility settings pages do not have a dependable result
+     * contract. Resolving this bridge call after launch avoids keeping a
+     * Capacitor Activity Callback alive under a callback name that may never
+     * be returned. MainActivity and the visible WebView reconcile the real
+     * service state when the user comes back to the app.
+     */
+    private boolean launchSettings(Intent intent) {
         try {
-            startActivityForResult(call, settings, "accessibilityRecommendationPermissionResult");
-        } catch (Exception error) {
-            MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), false);
-            call.reject("无法打开 Android 无障碍设置", error);
+            if (intent.resolveActivity(getContext().getPackageManager()) == null) return false;
+            getActivity().startActivity(intent);
+            return true;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 }
