@@ -339,3 +339,27 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
   .drop-zone-actions { flex-direction: column; width: 100%; }
   .drop-zone-actions .primary-button, .drop-zone-actions .glass-button { width: 100%; }
 }
+
+.task-dock { position: fixed; right: 18px; bottom: 18px; z-index: 40; display: grid; gap: 10px; width: min(320px, calc(100vw - 28px)); pointer-events: none; }
+.task-dock > * { pointer-events: auto; }
+.task-card { display: grid; gap: 8px; padding: 12px 14px; border-radius: 15px; box-shadow: 0 16px 40px rgba(37, 70, 51, .20); animation: rise .2s ease; }
+.task-card.error { border-color: rgba(198, 113, 104, .35); }
+.task-card-head { display: flex; align-items: center; gap: 8px; }
+.task-card-title { flex: 1; min-width: 0; overflow: hidden; color: #557362; font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-head strong { color: #619273; font-size: 11px; font-weight: 750; }
+.task-card.error .task-card-head strong { color: #b0736b; }
+.task-card-close { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 7px; color: #9aaca1; background: transparent; }
+.task-card-close:hover { color: #557362; background: rgba(92, 139, 105, .14); }
+.task-card-track { height: 6px; overflow: hidden; border-radius: 999px; background: rgba(120, 150, 128, .18); }
+.task-card-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #79ab88, #4d7f60); transition: width .25s ease; }
+.task-card-fill.error { background: #c07b72; }
+.task-card-fill.indeterminate { width: 42% !important; animation: task-slide 1.15s ease-in-out infinite; }
+@keyframes task-slide { from { transform: translateX(-115%); } to { transform: translateX(245%); } }
+.task-card small { color: #7d9287; font-size: 11px; line-height: 1.45; }
+.task-card-detail { color: #96a79d !important; font-size: 10px !important; }
+.modal-task { margin-top: 11px; }
+.modal-task .task-card { background: rgba(255, 255, 255, .62); box-shadow: none; animation: none; }
+.backup-running-hint { margin: 9px 2px 0; color: #93a49a; font-size: 10px; line-height: 1.5; }
+@media (max-width: 480px) {
+  .task-dock { right: 10px; bottom: calc(10px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); left: 10px; width: auto; }
+}

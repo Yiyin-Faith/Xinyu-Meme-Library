@@ -11,8 +11,9 @@ import Modal from './components/Modal';
 import { db, defaultSettings, deleteMemes, ensureCollections, formatBytes, getOrCreateCollection, importImages, importPrefilledImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, saveEditedMeme, updateMeme } from './lib/library';
 import { commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, readBackup, type BackupMode, type ExportProgress } from './lib/backup';
 import { analyzeImportEntries, analyzeImportZip, requiredCollections, type ImportAnalysis } from './lib/import-source';
-import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
+import { AndroidBackupCopyError, exportAndroidBackup, notifyAndroidTask, type AndroidBackupProgress } from './lib/android-backup';
 import { canEditImage, clampCrop, editedDimensions, fullCrop, isNoopEdit, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
+import { dismissTask, failTask, finishTask, startTask, updateTask, useTasks, type BackgroundTask, type TaskProgress } from './lib/tasks';
 import { fetchOnlineImage, searchOnline } from './lib/online';
 import { deliverAndroidFloatingMiniSnapshot, getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, syncAndroidFloatingMiniCatalog, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
@@ -205,6 +206,7 @@ function App() {
     {folderImportOpen && <FolderImportModal onClose={() => setFolderImportOpen(false)} onNotify={notify} onImported={() => { setFolderImportOpen(false); setPrimaryTab('library'); setView('all'); }} />}
     {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} onNotify={notify} />}
     {collectionOpen && <Modal title="新建收藏夹" onClose={() => setCollectionOpen(false)}><form className="edit-fields" onSubmit={(event) => { event.preventDefault(); void createCollection(); }}><label>收藏夹名称<input autoFocus value={collectionName} onChange={(event) => setCollectionName(event.target.value)} required maxLength={40} /></label><button type="submit" className="primary-button">创建收藏夹</button></form></Modal>}
+    <TaskDock />
     {toast && <div className="toast glass"><Check size={16} />{toast}</div>}
   </div>;
 }
@@ -260,7 +262,9 @@ function FolderImportModal({ onClose, onNotify, onImported }: { onClose: () => v
   const zipInput = useRef<HTMLInputElement>(null);
   const [analysis, setAnalysis] = useState<ImportAnalysisState>();
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<{ completed: number; total: number }>();
+  const [activeTaskId, setActiveTaskId] = useState<string>();
+  const tasks = useTasks();
+  const activeTask = tasks.find((task) => task.id === activeTaskId);
 
   const analyzeFolder = async (list: FileList | null) => {
     if (!list?.length) return;
@@ -279,32 +283,50 @@ function FolderImportModal({ onClose, onNotify, onImported }: { onClose: () => v
 
   const runImport = async () => {
     if (!analysis || analysis.kind === 'working' || analysis.kind === 'error' || analysis.kind === 'empty') return;
+    const total = analysis.items.length;
+    const taskId = startTask({ id: `import-${Date.now()}`, kind: 'import', title: '从文件夹 / ZIP 导入', label: `正在入库 0 / ${total}`, detail: '', badge: '0%', percentage: 0, indeterminate: false, progress: importTaskProgress(0, total) });
+    setActiveTaskId(taskId);
     setBusy(true);
-    setProgress({ completed: 0, total: analysis.items.length });
     try {
       if (analysis.kind === 'manifest') await ensureCollections(requiredCollections(analysis.manifest, analysis.items));
-      const result = await importPrefilledImages(analysis.items, (completed, total) => setProgress({ completed, total }));
+      const result = await importPrefilledImages(analysis.items, (completed, count) => {
+        const percentage = count ? Math.round((completed / count) * 100) : 0;
+        updateTask(taskId, { label: `正在入库 ${completed} / ${count}`, badge: `${percentage}%`, percentage, progress: importTaskProgress(completed, count) });
+      });
       const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : '';
+      finishTask(taskId, { label: `已入库 ${result.added} 张，跳过 ${result.skipped} 张`, detail: '', notification: `导入完成：新增 ${result.added} 张，跳过 ${result.skipped} 张` });
       onNotify(`已入库 ${result.added} 张，跳过 ${result.skipped} 张${detail}`);
       onImported();
       onClose();
-    } catch (error) { onNotify(error instanceof Error ? error.message : '导入失败'); }
-    finally { setBusy(false); setProgress(undefined); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '导入失败';
+      failTask(taskId, message, { label: '导入失败' });
+      onNotify(message);
+    }
+    finally { setBusy(false); }
   };
   const runRestore = async () => {
     if (!analysis || analysis.kind !== 'manifest' || !analysis.backup) return;
+    const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '按备份恢复', label: '正在合并到当前图库…', detail: '', badge: '处理中', percentage: 0, indeterminate: true });
+    setActiveTaskId(taskId);
     setBusy(true);
     try {
       const result = await mergeBackup(analysis.backup, true, false);
-      onNotify(`已按备份恢复：新增 ${result.added} 张，更新 ${result.updated} 张，删除 ${result.deleted} 张`);
+      const summary = `新增 ${result.added} 张，更新 ${result.updated} 张，删除 ${result.deleted} 张`;
+      finishTask(taskId, { label: '恢复完成', detail: summary, notification: `备份恢复完成：${summary}` });
+      onNotify(`已按备份恢复：${summary}`);
       onImported();
       onClose();
-    } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '恢复失败，未修改本地库';
+      failTask(taskId, message, { label: '恢复失败，未修改本地库' });
+      onNotify(message);
+    }
     finally { setBusy(false); }
   };
 
   const matched = analysis?.kind === 'manifest' ? analysis.matched : 0;
-  return <Modal title="从文件夹 / ZIP 导入" subtitle="批量导入会合并到当前图库，不会删除本机已有的图片。" onClose={busy ? () => undefined : onClose}>
+  return <Modal title="从文件夹 / ZIP 导入" subtitle="批量导入会合并到当前图库，不会删除本机已有的图片；开始时可以关闭本窗口，进度会留在右下角。" onClose={onClose}>
     <div className="folder-import">
       <input ref={folderInput} hidden type="file" multiple {...({ webkitdirectory: 'true' } as Record<string, string>)} onChange={(event) => { void analyzeFolder(event.target.files); }} />
       <input ref={zipInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => { void analyzeZip(event.target.files?.[0]); }} />
@@ -319,7 +341,7 @@ function FolderImportModal({ onClose, onNotify, onImported }: { onClose: () => v
       {analysis?.kind === 'images' && <div className="folder-import-summary"><strong>将作为普通图片批量导入</strong><span>共 {analysis.items.length} 张（没有找到心语清单）</span></div>}
       {analysis?.kind === 'manifest' && <div className="folder-import-summary"><strong>识别到心语清单</strong><span>共 {analysis.items.length} 张，其中 {matched} 张会保留原来的名称、Tag 和分组</span>{analysis.backup && <small>这个 ZIP 同时是一个完整的心语备份，你也可以按备份语义恢复。</small>}</div>}
 
-      {busy && progress && <p className="folder-import-status">正在入库 {progress.completed} / {progress.total}</p>}
+      {activeTask && <div className="modal-task"><TaskCard task={activeTask} /></div>}
 
       <div className="folder-import-actions">
         <button type="button" className="glass-button" disabled={busy} onClick={onClose}>取消</button>
@@ -587,8 +609,8 @@ function ImportModal({ collections, initialFiles, onClose, onNotify, onSwitchToF
   const addTag = () => { const next = normalizeTags([...tags, tagInput]); setTags(next); setTagInput(''); };
   const choose = (nextFiles: FileList | File[]) => { const next = [...nextFiles]; if (next.length) setFiles(next); };
   const openPicker = () => { const picker = input.current as (HTMLInputElement & { showPicker?: () => void }) | null; if (!picker) return; picker.value = ''; try { if (picker.showPicker) { picker.showPicker(); return; } } catch { /* WebView and older browsers fall back to click. */ } picker.click(); };
-  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (!files.length) { openPicker(); return; } setBusy(true); try { const finalTags = normalizeTags([...tags, tagInput]); const collection = await getOrCreateCollection(groupName); const result = await importImages(files, { collectionId: collection?.id, title, tags: finalTags }); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; onNotify(`已入库 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); onClose(); } catch (error) { onNotify(error instanceof Error ? error.message : '导入失败'); } finally { setBusy(false); } };
-  return <Modal title="添加图片" subtitle="名称、分组和标签都可不填；点击添加后会立即入库。" onClose={busy ? () => undefined : onClose}><form className="import-modal" onSubmit={(event) => { void submit(event); }}><input ref={input} className="native-file-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => choose(event.target.files ?? [])} /><button type="button" className="import-picker" onClick={openPicker} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files); }}><ImagePlus size={30} /><strong>{files.length ? `已选择 ${files.length} 张图片` : '点击选择，或把图片拖进来'}</strong><span>{files.length > 1 && title.trim() ? '批量导入时会在自定义名称后追加序号' : '支持批量导入，内容相同的图片会自动去重'}</span></button><label>自定义名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder={files.length > 1 ? '例如：猫猫反应（会自动加序号）' : '不填则使用图片文件名'} /></label><label>分组（可选，可直接新建）<input list="collection-options" value={groupName} onChange={(event) => setGroupName(event.target.value)} maxLength={40} placeholder="例如：日常、游戏、工作" /><datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist></label><label>标签（可选）<div className="tag-editor">{tags.map((tag) => <span key={tag}>#{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}><X size={12} /></button></span>)}<input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } }} placeholder={tags.length ? '继续输入标签' : '输入后按回车添加一个标签'} /></div><small>按回车添加一个标签；不填也可以直接入库。</small></label><div className="import-actions">{onSwitchToFolder && <button type="button" className="text-button import-switch" disabled={busy} onClick={onSwitchToFolder}>从文件夹 / ZIP 导入</button>}<button type="button" className="glass-button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '正在入库…' : files.length ? `添加 ${files.length} 张` : '选择图片'}</button></div></form></Modal>;
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (!files.length) { openPicker(); return; } const taskId = startTask({ id: `import-${Date.now()}`, kind: 'import', title: '添加图片', label: `正在入库 ${files.length} 张…`, detail: '', badge: '处理中', percentage: 0, indeterminate: true }); setBusy(true); try { const finalTags = normalizeTags([...tags, tagInput]); const collection = await getOrCreateCollection(groupName); const result = await importImages(files, { collectionId: collection?.id, title, tags: finalTags }); const detail = result.errors.length ? `；${result.errors.slice(0, 2).join('；')}` : ''; finishTask(taskId, { label: `已入库 ${result.added} 张，跳过 ${result.skipped} 张`, notification: `导入完成：新增 ${result.added} 张，跳过 ${result.skipped} 张` }); onNotify(`已入库 ${result.added} 张，跳过 ${result.skipped} 张${detail}`); onClose(); } catch (error) { const message = error instanceof Error ? error.message : '导入失败'; failTask(taskId, message, { label: '导入失败' }); onNotify(message); } finally { setBusy(false); } };
+  return <Modal title="添加图片" subtitle="名称、分组和标签都可不填；点击添加后会立即入库，进度会留在右下角。" onClose={onClose}><form className="import-modal" onSubmit={(event) => { void submit(event); }}><input ref={input} className="native-file-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => choose(event.target.files ?? [])} /><button type="button" className="import-picker" onClick={openPicker} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files); }}><ImagePlus size={30} /><strong>{files.length ? `已选择 ${files.length} 张图片` : '点击选择，或把图片拖进来'}</strong><span>{files.length > 1 && title.trim() ? '批量导入时会在自定义名称后追加序号' : '支持批量导入，内容相同的图片会自动去重'}</span></button><label>自定义名称（可选）<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder={files.length > 1 ? '例如：猫猫反应（会自动加序号）' : '不填则使用图片文件名'} /></label><label>分组（可选，可直接新建）<input list="collection-options" value={groupName} onChange={(event) => setGroupName(event.target.value)} maxLength={40} placeholder="例如：日常、游戏、工作" /><datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist></label><label>标签（可选）<div className="tag-editor">{tags.map((tag) => <span key={tag}>#{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}><X size={12} /></button></span>)}<input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } }} placeholder={tags.length ? '继续输入标签' : '输入后按回车添加一个标签'} /></div><small>按回车添加一个标签；不填也可以直接入库。</small></label><div className="import-actions">{onSwitchToFolder && <button type="button" className="text-button import-switch" disabled={busy} onClick={onSwitchToFolder}>从文件夹 / ZIP 导入</button>}<button type="button" className="glass-button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '正在入库…' : files.length ? `添加 ${files.length} 张` : '选择图片'}</button></div></form></Modal>;
 }
 
 type BackupStatus = ExportProgress | AndroidBackupProgress
@@ -603,23 +625,20 @@ function formatEta(milliseconds: number) {
   return `预计剩余 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
 
-function useBackupEta(status: BackupStatus) {
+/** Throughput sampler shared by every long task: smooths speed and returns an ETA string. */
+function useEta(measurable: boolean, phase: string, total: number, completed: number) {
   const stats = useRef<{ phase: string; startedAt: number; sampledAt: number; sampledWork: number; speed: number; samples: number } | undefined>(undefined);
   const [eta, setEta] = useState('');
   useEffect(() => {
-    const measurable = status.phase === 'collecting' || status.phase === 'copying' || status.phase === 'compressing';
-    if (!measurable) {
+    if (!measurable || !total || completed >= total) {
       stats.current = undefined;
       setEta((previous) => previous ? '' : previous);
       return;
     }
-    const total = status.totalBytes > 0 ? status.totalBytes : status.total;
-    const completed = status.totalBytes > 0 ? status.bytesCompleted : status.completed;
-    if (!total || completed >= total) { setEta((previous) => previous ? '' : previous); return; }
     const now = performance.now();
     const previous = stats.current;
-    if (!previous || previous.phase !== status.phase || completed < previous.sampledWork) {
-      stats.current = { phase: status.phase, startedAt: now, sampledAt: now, sampledWork: completed, speed: 0, samples: 0 };
+    if (!previous || previous.phase !== phase || completed < previous.sampledWork) {
+      stats.current = { phase, startedAt: now, sampledAt: now, sampledWork: completed, speed: 0, samples: 0 };
       setEta((value) => value ? '' : value);
       return;
     }
@@ -631,33 +650,102 @@ function useBackupEta(status: BackupStatus) {
     const next = { ...previous, sampledAt: now, sampledWork: completed, speed, samples: previous.samples + 1 };
     stats.current = next;
     if (next.samples < 2 || now - next.startedAt < 650 || !speed) return;
-    const estimate = (total - completed) / speed;
-    setEta(formatEta(estimate));
-  }, [status]);
+    setEta(formatEta((total - completed) / speed));
+  }, [measurable, phase, total, completed]);
   return eta;
 }
 
-function BackupProgressPanel({ status }: { status: BackupStatus }) {
+/** Phase → human copy. Shared by the task dock so the modal and the dock agree. */
+function describeBackupStatus(status: BackupStatus) {
   const copying = status.phase === 'collecting' || status.phase === 'copying';
   const compressing = status.phase === 'compressing';
   const indeterminate = status.phase === 'packing' || status.phase === 'saving' || status.phase === 'selecting' || status.phase === 'raw-complete';
-  const percentage = (copying || compressing) && (status.totalBytes || status.total) ? Math.round(((status.totalBytes ? status.bytesCompleted / status.totalBytes : status.completed / Math.max(status.total, 1))) * 100) : status.phase === 'complete' || status.phase === 'raw' || status.phase === 'raw-only' ? 100 : 0;
-  const eta = useBackupEta(status);
+  const percentage = (copying || compressing) && (status.totalBytes || status.total) ? Math.round((status.totalBytes ? status.bytesCompleted / status.totalBytes : status.completed / Math.max(status.total, 1)) * 100) : status.phase === 'complete' || status.phase === 'raw' || status.phase === 'raw-only' ? 100 : 0;
   let label = '导出完成';
   let detail = '';
   let state = '已完成';
   if (status.phase === 'selecting') { label = '请选择外部备份文件夹'; detail = 'Android 会先写入原始备份；压缩失败也不会丢失已完成的原始备份。'; state = '等待选择'; }
-  else if (status.phase === 'collecting') { label = `正在读取图片 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''}`; state = `${percentage}%`; }
-  else if (status.phase === 'copying') { label = `正在复制原始备份 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''} · 位置：${status.location}`; state = `${percentage}%`; }
+  else if (status.phase === 'collecting') { label = `正在读取图片 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}`; state = `${percentage}%`; }
+  else if (status.phase === 'copying') { label = `正在复制原始备份 ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 位置：${status.location}`; state = `${percentage}%`; }
   else if (status.phase === 'raw-complete') { label = '原始备份已完成'; detail = `位置：${status.location}。现在开始在 Android 原生层生成 ZIP。`; state = '安全完成'; }
   else if (status.phase === 'packing') { label = '正在生成 ZIP 备份'; detail = '正在把原图和信息写入备份包'; state = '正在打包'; }
-  else if (status.phase === 'compressing') { label = `正在生成 ZIP ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)}${eta ? ` · ${eta}` : ''} · 原始备份：${status.location}`; state = `${percentage}%`; }
+  else if (status.phase === 'compressing') { label = `正在生成 ZIP ${status.completed} / ${status.total}`; detail = `${formatBytes(status.bytesCompleted)} / ${formatBytes(status.totalBytes)} · 原始备份：${status.location}`; state = `${percentage}%`; }
   else if (status.phase === 'saving') { label = '正在保存备份文件'; detail = '正在写入你选择的位置'; state = '正在保存'; }
   else if (status.phase === 'raw') { label = '原始备份已完成'; detail = `备份位置：${status.location}。其中包含 manifest.json 和 images；未选择打包 ZIP。`; state = '已完成'; }
-  else if (status.phase === 'raw-only') { label = '原始备份成功，仅压缩失败'; detail = `备份位置：${status.location}。其中包含 manifest.json 和 images，可在文件管理器压缩为 ZIP 后恢复。${status.error}`; state = '请保留原始备份'; }
+  else if (status.phase === 'raw-only') { label = '备份已完成，ZIP 打包失败，未压缩备份已保留'; detail = `位置：${status.location}。可在文件管理器压缩为 ZIP 后恢复。${status.error}`; state = '请保留原始备份'; }
   else if (status.phase === 'copy-failed') { label = '原始备份未完成'; detail = `已保留已写入的文件：${status.location}。${status.error}`; state = '导出失败'; }
   else { detail = `${status.fileName} 已完成${status.location ? ` · 位置：${status.location}` : ''}`; }
-  return <div className={`backup-progress ${status.phase}`} role="status" aria-live="polite"><div><span>{label}</span><strong>{state}</strong></div><div className="backup-progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} aria-valuetext={detail}><i className={`backup-progress-fill ${indeterminate ? 'indeterminate' : ''}`} style={indeterminate ? undefined : { width: `${percentage}%` }} /></div><small>{detail}</small></div>;
+  return { label, detail, state, percentage, indeterminate };
+}
+
+/** Pull the numeric counters out of a backup status so the dock can chart progress. */
+function backupProgress(status: BackupStatus): TaskProgress {
+  const counters = status.phase === 'collecting' || status.phase === 'copying' || status.phase === 'compressing' || status.phase === 'packing' || status.phase === 'raw-complete' ? status : undefined;
+  return {
+    phase: status.phase,
+    completed: counters?.completed ?? 0,
+    total: counters?.total ?? 0,
+    bytesCompleted: counters?.bytesCompleted ?? 0,
+    totalBytes: counters?.totalBytes ?? 0,
+    measurable: status.phase === 'collecting' || status.phase === 'copying' || status.phase === 'compressing',
+  };
+}
+
+function useTaskEta(progress: TaskProgress | undefined, running: boolean) {
+  const measurable = running && Boolean(progress?.measurable);
+  const total = progress ? (progress.totalBytes > 0 ? progress.totalBytes : progress.total) : 0;
+  const completed = progress ? (progress.totalBytes > 0 ? progress.bytesCompleted : progress.completed) : 0;
+  return useEta(measurable, progress?.phase ?? '', total, completed);
+}
+
+/** Copy shown when a measurable task has no ETA yet, so the dock never looks stuck. */
+const PHASE_FALLBACK: Record<string, string> = { collecting: '正在读取…', copying: '正在复制…', compressing: '正在压缩…', importing: '正在处理…' };
+
+/** Progress payload for a plain import task (no byte accounting). */
+function importTaskProgress(completed: number, total: number): TaskProgress {
+  return { phase: 'importing', completed, total, bytesCompleted: 0, totalBytes: 0, measurable: true };
+}
+
+function TaskCard({ task }: { task: BackgroundTask }) {
+  const running = task.state === 'running';
+  const eta = useTaskEta(task.progress, running);
+  const fallback = running && task.progress?.measurable ? PHASE_FALLBACK[task.progress.phase] ?? '' : '';
+  const note = running ? eta || fallback : '';
+  const detail = [task.detail, note].filter(Boolean).join(' · ');
+  const percentage = task.state === 'done' ? 100 : task.percentage;
+  const indeterminate = running && task.indeterminate;
+  const badge = task.state === 'error' ? '失败' : task.state === 'done' ? '已完成' : task.badge;
+  return (
+    <div className={`task-card glass ${task.state}`} role="status" aria-live="polite">
+      <div className="task-card-head">
+        <span className="task-card-title">{task.title}</span>
+        <strong>{badge}</strong>
+        {task.dismissable && <button type="button" className="task-card-close" aria-label="关闭任务" onClick={() => dismissTask(task.id)}><X size={13} /></button>}
+      </div>
+      <div className="task-card-track" role="progressbar" aria-label={task.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} aria-valuetext={detail || task.label}>
+        <i className={`task-card-fill ${indeterminate ? 'indeterminate' : ''} ${task.state}`} style={indeterminate ? undefined : { width: `${percentage}%` }} />
+      </div>
+      <small>{task.state === 'error' && task.error ? task.error : task.label}</small>
+      {detail && <small className="task-card-detail">{detail}</small>}
+    </div>
+  );
+}
+
+/** Floating task dock: keeps long jobs visible while the user browses elsewhere. */
+function TaskDock() {
+  const tasks = useTasks();
+  const notified = useRef(new Set<string>());
+  useEffect(() => {
+    for (const task of tasks) {
+      if (task.state === 'running' || !task.notification || notified.current.has(task.id)) continue;
+      notified.current.add(task.id);
+      // Only interrupt with a system notification when the app is not in the
+      // foreground; otherwise the dock already shows the result.
+      if (document.hidden) void notifyAndroidTask(task.title, task.notification);
+    }
+  }, [tasks]);
+  if (!tasks.length) return null;
+  return <div className="task-dock" role="region" aria-label="后台任务">{tasks.map((task) => <TaskCard key={task.id} task={task} />)}</div>;
 }
 
 function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (message: string) => void }) {
@@ -667,7 +755,10 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
   const [packZip, setPackZip] = useState(true);
   const [deletions, setDeletions] = useState(true);
   const [restoreSettings, setRestoreSettings] = useState(false);
-  const [exportStatus, setExportStatus] = useState<BackupStatus>();
+  const [exportPhase, setExportPhase] = useState<string>();
+  const [activeTaskId, setActiveTaskId] = useState<string>();
+  const tasks = useTasks();
+  const activeTask = tasks.find((task) => task.id === activeTaskId);
   const baseline = useLiveQuery(() => db.backupBaselines.get('latest'), []);
   const canIncremental = Boolean(baseline);
   const create = async () => {
@@ -675,57 +766,80 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     if (plan.status === 'missing-baseline') { onNotify('请先执行一次完整备份'); setBackupMode('full'); return; }
     if (plan.status === 'no-changes') { onNotify('自上次备份以来没有需要导出的变化'); return; }
     const fileName = `xinyu-${backupMode}-backup-${new Date().toISOString().slice(0, 10)}.puff.zip`;
+    const label = `${backupMode === 'full' ? '完整' : '增量'}备份导出`;
+    const taskId = startTask({ id: `backup-${Date.now()}`, kind: 'backup', title: label, label: '准备导出…', detail: '', badge: '准备中', percentage: 0, indeterminate: true });
+    setActiveTaskId(taskId);
+    // Every status update is mirrored into the shared task so the dock keeps
+    // showing progress after this modal is closed.
+    const push = (status: BackupStatus) => {
+      const view = describeBackupStatus(status);
+      setExportPhase(status.phase);
+      updateTask(taskId, { label: view.label, detail: view.detail, badge: view.state, percentage: view.percentage, indeterminate: view.indeterminate, progress: backupProgress(status) });
+    };
     setBusy(true);
     try {
       if (isAndroid) {
-        const result = await exportAndroidBackup(plan, setExportStatus, packZip);
-        if (result.kind === 'cancelled') { setExportStatus(undefined); onNotify('已取消选择，备份未开始'); return; }
+        const result = await exportAndroidBackup(plan, push, packZip);
+        if (result.kind === 'cancelled') { dismissTask(taskId); onNotify('已取消选择，备份未开始'); return; }
         if (result.kind === 'raw') {
-          setExportStatus({ phase: 'raw', location: result.rawLocation });
+          push({ phase: 'raw', location: result.rawLocation });
+          finishTask(taskId, { label: `${label}已完成（未打包 ZIP）`, detail: `位置：${result.rawLocation}` });
           onNotify(`${backupMode === 'full' ? '完整' : '增量'}原始备份已导出`);
           return;
         }
         if (result.kind === 'raw-only') {
-          setExportStatus({ phase: 'raw-only', location: result.rawLocation, error: result.compressionError });
-          onNotify('原始备份成功，仅压缩失败；请保留原始备份文件夹');
+          push({ phase: 'raw-only', location: result.rawLocation, error: result.compressionError });
+          finishTask(taskId, { label: '备份已完成，ZIP 打包失败，未压缩备份已保留', detail: `位置：${result.rawLocation}`, notification: '备份已完成，ZIP 打包失败，未压缩备份已保留。' });
+          onNotify('备份已完成，ZIP 打包失败，未压缩备份已保留');
           return;
         }
-        setExportStatus({ phase: 'complete', fileName: result.zipName, location: result.zipLocation });
+        push({ phase: 'complete', fileName: result.zipName, location: result.zipLocation });
+        finishTask(taskId, { label: `${label}已完成`, detail: `ZIP：${result.zipLocation}`, notification: `${label}已完成。` });
         onNotify(`${backupMode === 'full' ? '完整' : '增量'}备份已导出，原始备份和 ZIP 都已保留`);
         return;
       }
-      setExportStatus({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
-      const blob = await exportBackupPlan(plan, undefined, setExportStatus);
-      setExportStatus({ phase: 'saving', fileName });
+      push({ phase: 'collecting', completed: 0, total: 0, bytesCompleted: 0, totalBytes: 0 });
+      const blob = await exportBackupPlan(plan, undefined, push);
+      push({ phase: 'saving', fileName });
       const saved = await saveBlob(blob, fileName);
-      if (!saved) { setExportStatus(undefined); onNotify('已取消导出，备份未保存'); return; }
+      if (!saved) { dismissTask(taskId); onNotify('已取消导出，备份未保存'); return; }
       await commitBackupExportPlan(plan);
-      setExportStatus({ phase: 'complete', fileName });
+      push({ phase: 'complete', fileName });
+      finishTask(taskId, { label: `${label}已完成`, detail: fileName });
       onNotify(`${backupMode === 'full' ? '完整' : '增量'}备份已导出`);
     } catch (error) {
       if (error instanceof AndroidBackupCopyError) {
-        setExportStatus({ phase: 'copy-failed', location: error.location, error: error.message });
+        push({ phase: 'copy-failed', location: error.location, error: error.message });
+        failTask(taskId, error.message, { label: '原始备份未完成', detail: `已保留已写入的文件：${error.location}` });
         onNotify('原始备份未完成，已保留已写入文件');
       } else {
-        setExportStatus(undefined);
-        onNotify(error instanceof Error ? error.message : '备份失败');
+        const message = error instanceof Error ? error.message : '备份失败';
+        failTask(taskId, message, { label: '备份失败', detail: '' });
+        onNotify(message);
       }
     }
     finally { setBusy(false); }
   };
   const restore = async (file: File) => {
     setBusy(true);
-    setExportStatus(undefined);
+    const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从备份恢复', label: '正在校验备份文件…', detail: file.name, badge: '准备中', percentage: 0, indeterminate: true });
     try {
       const backup = await readBackup(file);
+      updateTask(taskId, { label: '正在合并到当前图库…', badge: '处理中' });
       const result = await mergeBackup(backup, deletions, restoreSettings);
-      onNotify(`恢复完成：新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`);
+      const summary = `新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`;
+      finishTask(taskId, { label: '恢复完成', detail: summary, notification: `备份恢复完成：${summary}` });
+      onNotify(`恢复完成：${summary}`);
       onClose();
-    } catch (error) { onNotify(error instanceof Error ? error.message : '恢复失败，未修改本地库'); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '恢复失败，未修改本地库';
+      failTask(taskId, message, { label: '恢复失败，未修改本地库' });
+      onNotify(message);
+    }
     finally { setBusy(false); }
   };
-  const exportButtonText = busy ? exportStatus?.phase === 'selecting' ? '选择位置…' : exportStatus?.phase === 'collecting' || exportStatus?.phase === 'copying' ? '正在复制…' : exportStatus?.phase === 'packing' || exportStatus?.phase === 'compressing' ? '正在压缩…' : '正在保存…' : exportStatus?.phase === 'complete' || exportStatus?.phase === 'raw' || exportStatus?.phase === 'raw-only' ? '再次导出' : '导出';
-  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会继续逐张写入外部备份目录；ZIP 压缩失败时原始备份与增量基准仍然有效。' : '完整或增量 .puff.zip 都可跨 Windows 和 Android 恢复。'} onClose={busy ? () => undefined : onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div className="backup-export-content"><strong>导出备份</strong><span>{backupMode === 'full' ? '完整导出当前图库及 manifest。' : '只导出上次有效备份后的新增、变化和删除记录。'}</span><div className="backup-type-choice" role="radiogroup" aria-label="备份类型"><label className={backupMode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" checked={backupMode === 'full'} disabled={busy} onChange={() => setBackupMode('full')} />完整备份</label><label className={`${backupMode === 'incremental' ? 'selected' : ''} ${canIncremental ? '' : 'disabled'}`}><input type="radio" name="backup-mode" checked={backupMode === 'incremental'} disabled={busy || !canIncremental} onChange={() => setBackupMode('incremental')} />增量备份</label></div><small className="backup-baseline-note">{canIncremental ? '以最近一次成功写入的 manifest 为基准。' : '请先执行一次完整备份，才能使用增量备份。'}</small><label className={`backup-zip-choice ${!isAndroid ? 'disabled' : ''}`}><input type="checkbox" checked={packZip} disabled={busy || !isAndroid} onChange={(event) => setPackZip(event.target.checked)} />打包 ZIP {!isAndroid && <small>（此平台仅支持 ZIP）</small>}</label></div><button className="primary-button" disabled={busy} onClick={() => { void create(); }}><Download size={15} /> {exportButtonText}</button></div>{exportStatus && <BackupProgressPanel status={exportStatus} />}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库；增量备份需要先恢复它所依赖的完整备份。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
+  const exportButtonText = busy ? exportPhase === 'selecting' ? '选择位置…' : exportPhase === 'collecting' || exportPhase === 'copying' ? '正在复制…' : exportPhase === 'packing' || exportPhase === 'compressing' ? '正在压缩…' : '正在保存…' : exportPhase === 'complete' || exportPhase === 'raw' || exportPhase === 'raw-only' ? '再次导出' : '导出';
+  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会继续逐张写入外部备份目录；ZIP 压缩失败时原始备份与增量基准仍然有效。导出时可以关闭本窗口，进度会留在右下角。' : '完整或增量 .puff.zip 都可跨 Windows 和 Android 恢复。导出时可以关闭本窗口，进度会留在右下角。'} onClose={onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div className="backup-export-content"><strong>导出备份</strong><span>{backupMode === 'full' ? '完整导出当前图库及 manifest。' : '只导出上次有效备份后的新增、变化和删除记录。'}</span><div className="backup-type-choice" role="radiogroup" aria-label="备份类型"><label className={backupMode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" checked={backupMode === 'full'} disabled={busy} onChange={() => setBackupMode('full')} />完整备份</label><label className={`${backupMode === 'incremental' ? 'selected' : ''} ${canIncremental ? '' : 'disabled'}`}><input type="radio" name="backup-mode" checked={backupMode === 'incremental'} disabled={busy || !canIncremental} onChange={() => setBackupMode('incremental')} />增量备份</label></div><small className="backup-baseline-note">{canIncremental ? '以最近一次成功写入的 manifest 为基准。' : '请先执行一次完整备份，才能使用增量备份。'}</small><label className={`backup-zip-choice ${!isAndroid ? 'disabled' : ''}`}><input type="checkbox" checked={packZip} disabled={busy || !isAndroid} onChange={(event) => setPackZip(event.target.checked)} />打包 ZIP {!isAndroid && <small>（此平台仅支持 ZIP）</small>}</label></div><button className="primary-button" disabled={busy} onClick={() => { void create(); }}><Download size={15} /> {exportButtonText}</button></div>{busy && <p className="backup-running-hint">导出在后台继续，可关闭窗口或切到其他页面，右下角会一直显示进度。</p>}{activeTask && <div className="modal-task"><TaskCard task={activeTask} /></div>}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库；增量备份需要先恢复它所依赖的完整备份。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
 }
 
 export default App;
