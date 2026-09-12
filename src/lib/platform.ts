@@ -3,6 +3,8 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import type { Meme } from '../types';
 import type { FloatingMiniCatalogEntry, FloatingMiniSnapshot } from './floating-mini';
+import { extension } from './library';
+export { extension } from './library';
 
 export const isAndroid = Capacitor.getPlatform() === 'android';
 export const isDesktop = !!window.puffDesktop;
@@ -94,7 +96,6 @@ export async function setAlwaysOnTop(enabled: boolean): Promise<boolean> {
   if (!window.puffDesktop) return false;
   return window.puffDesktop.setAlwaysOnTop(enabled);
 }
-export function extension(mime: string) { return ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/svg+xml': 'svg', 'application/zip': 'zip' } as Record<string, string>)[mime] || 'png'; }
 export function safeFilename(name: string) { return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').slice(0, 100); }
 async function base64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve((reader.result as string).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob); });

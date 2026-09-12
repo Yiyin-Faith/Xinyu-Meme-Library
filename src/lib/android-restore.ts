@@ -60,7 +60,8 @@ export async function pickAndroidBackupFolder(): Promise<AndroidBackupFolder | u
 
 /**
  * Reads a backup that is still an uncompressed folder (`manifest.json` plus
- * `images/<sha256>`), directly from user storage. It reuses the ZIP restore's
+ * `images/<sha256>` or a provider-appended supported image extension), directly
+ * from user storage. It reuses the ZIP restore's
  * layout whitelist and its `assembleBackup` core, so size / MIME / SHA-256 /
  * dimension / collection checks and every error message are identical whether
  * the user picked a ZIP or a folder.

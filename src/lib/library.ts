@@ -33,6 +33,17 @@ export class LibraryDB extends Dexie {
 }
 export const db = new LibraryDB();
 export const MAX_IMAGE_SIZE = 32 * 1024 * 1024;
+/** One MIME/extension mapping shared by import, export and sharing paths. */
+export const IMAGE_MIME_EXTENSIONS = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/avif': 'avif', 'image/svg+xml': 'svg',
+} as const;
+// JPEG providers may use either spelling even though MIME-to-extension export
+// canonicalizes it to `.jpg`.
+export const SUPPORTED_IMAGE_EXTENSIONS = new Set([...Object.values(IMAGE_MIME_EXTENSIONS), 'jpeg']);
+export function extension(mime: string) {
+  return ({ ...IMAGE_MIME_EXTENSIONS, 'application/zip': 'zip' } as Record<string, string>)[mime] || 'png';
+}
 export const defaultSettings: Settings = { id: 'preferences', reduceMotion: false, dense: true, onlineSupplement: false, floatingWindow: false };
 export const defaultCollections: Collection[] = [
   { id: 'daily', name: '日常营业', color: '#96af91', updatedAt: 1 },

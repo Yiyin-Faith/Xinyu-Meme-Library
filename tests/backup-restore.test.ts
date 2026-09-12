@@ -181,6 +181,21 @@ describe('backup restore compatibility', () => {
     await expect(readBackup(archive, false)).rejects.toThrow('多个不相关的根目录');
   });
 
+  it('6b · refuses duplicate logical IDs and unsupported image basenames', async () => {
+    const source = database('duplicate-physical-names');
+    const item = await meme('重复物理名');
+    await source.memes.add(item);
+    const { files } = await payload(source);
+    await expect(readBackup(zipBlob({ ...files, [`images/${item.id}.webp`]: files[`images/${item.id}`] }), false)).rejects.toThrow('未知文件');
+    await expect(readBackup(zipBlob({
+      'manifest.json': files['manifest.json'],
+      [`images/${item.id}.png`]: files[`images/${item.id}`],
+      [`images/${item.id}.webp`]: files[`images/${item.id}`],
+    }), false)).rejects.toThrow('未知文件');
+    await expect(readBackup(zipBlob({ 'manifest.json': files['manifest.json'], [`images/${item.id}.exe`]: files[`images/${item.id}`] }), false)).rejects.toThrow('未知文件');
+    await expect(readBackup(zipBlob({ 'manifest.json': files['manifest.json'], 'images/foo.webp': files[`images/${item.id}`] }), false)).rejects.toThrow('未知文件');
+  });
+
   it('7 · restores directly from a backup folder through SAF', async () => {
     const source = database('folder-source');
     const target = database('folder-target');
@@ -195,6 +210,21 @@ describe('backup restore compatibility', () => {
     expect(progress.length).toBeGreaterThan(0);
   });
 
+  it('7a · restores a root SAF folder whose provider appended .webp', async () => {
+    const source = database('folder-root-webp-source');
+    const target = database('folder-root-webp-target');
+    const item = await meme('根目录扩展名');
+    await source.memes.add(item);
+    const { files } = await payload(source);
+    useFolder(Object.fromEntries(Object.entries(files).map(([path, bytes]) => [
+      path === `images/${item.id}` ? `${path}.webp` : path, bytes,
+    ])));
+
+    const { result } = await restoreFolder(target);
+    expect(result.added).toBe(1);
+    expect(await target.memes.get(item.id)).toMatchObject({ title: '根目录扩展名' });
+  });
+
   it('7b · restores a SAF folder when the selected tree contains a wrapper', async () => {
     const source = database('folder-wrapper-source');
     const target = database('folder-wrapper-target');
@@ -207,6 +237,24 @@ describe('backup restore compatibility', () => {
     const { result } = await restoreFolder(target);
     expect(result.added).toBe(1);
     expect(await target.memes.get(item.id)).toMatchObject({ title: 'SAF 外包装' });
+  });
+
+  it('7d · restores a real SAF wrapper whose provider appended .webp', async () => {
+    const source = database('folder-webp-source');
+    const target = database('folder-webp-target');
+    const item = await meme('SAF 扩展名');
+    await source.memes.add(item);
+    const { files } = await payload(source);
+    const wrapper = 'xinyu-backup-2026-09-13-012549/';
+    const providerFiles: Record<string, Uint8Array> = {};
+    for (const [path, bytes] of Object.entries(files)) {
+      providerFiles[`${wrapper}${path === `images/${item.id}` ? `${path}.webp` : path}`] = bytes;
+    }
+    useFolder(providerFiles);
+
+    const { result } = await restoreFolder(target);
+    expect(result.added).toBe(1);
+    expect(await target.memes.get(item.id)).toMatchObject({ title: 'SAF 扩展名' });
   });
 
   it('7c · rejects SAF size and count limits before opening manifest or image streams', async () => {
@@ -301,7 +349,7 @@ describe('backup restore compatibility', () => {
 });
 
 describe('backup layout whitelist', () => {
-  it('accepts only manifest.json and images/<sha256>, reporting everything else', () => {
+  it('accepts manifest.json and pure or provider-extension images/<sha256>, reporting everything else', () => {
     const id = 'a'.repeat(64);
     const layout = normalizeBackupLayout(['manifest.json', `images/${id}`, 'notes.txt', 'images/sub/other']);
     expect(layout.manifestKey).toBe('manifest.json');

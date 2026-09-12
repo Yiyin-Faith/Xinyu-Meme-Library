@@ -27,6 +27,7 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,7 +50,7 @@ public class BackupExportPlugin extends Plugin {
     private static final String TASK_CHANNEL_ID = "xinyu-background-tasks";
     private static final Pattern BACKUP_FOLDER = Pattern.compile("xinyu-backup-[0-9-]{17}(?:-[0-9]{1,2})?");
     private static final Pattern IMAGE_PATH = Pattern.compile("images/[a-f0-9]{64}");
-    private static final Pattern IMAGE_NAME = Pattern.compile("[a-f0-9]{64}");
+    private static final Pattern IMAGE_NAME = Pattern.compile("([a-f0-9]{64})(?:\\.(?i:png|jpg|jpeg|webp|gif|avif|svg))?");
     private static final Pattern ZIP_NAME = Pattern.compile("xinyu-backup-[0-9-]{17}\\.puff\\.zip");
     /** Control characters, backslashes and parent-segment traversal. */
     private static final Pattern UNSAFE_RELATIVE_PATH = Pattern.compile("[\\u0000-\\u001f\\\\]|\\.\\.");
@@ -190,10 +191,13 @@ public class BackupExportPlugin extends Plugin {
             // directory. A manifest by itself is still a valid ZIP backup.
             if (images != null && !images.isDirectory()) throw new IOException("原始备份图片目录不正确");
             DocumentFile[] imageFiles = images == null ? new DocumentFile[0] : images.listFiles();
+            Map<String, DocumentFile> imageFilesById = new LinkedHashMap<>();
             long totalBytes = manifest.length();
             for (DocumentFile image : imageFiles) {
                 String name = image.getName();
-                if (name == null || !image.isFile() || !IMAGE_NAME.matcher(name).matches()) throw new IOException("原始备份包含未知图片文件");
+                String id = logicalImageId(name);
+                if (!image.isFile() || id == null) throw new IOException("原始备份包含未知图片文件");
+                if (imageFilesById.put(id, image) != null) throw new IOException("原始备份包含重复图片文件");
                 totalBytes += Math.max(0, image.length());
             }
             zipFile = root.createFile("application/zip", zipName);
@@ -205,11 +209,11 @@ public class BackupExportPlugin extends Plugin {
             try (ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(output, BUFFER_SIZE))) {
                 zip.setLevel(Deflater.NO_COMPRESSION);
                 copied += copyEntry(manifest, "manifest.json", zip);
-                notifyCompression(completed, imageFiles.length, copied, totalBytes);
-                for (DocumentFile image : imageFiles) {
-                    copied += copyEntry(image, "images/" + image.getName(), zip);
+                notifyCompression(completed, imageFilesById.size(), copied, totalBytes);
+                for (Map.Entry<String, DocumentFile> image : imageFilesById.entrySet()) {
+                    copied += copyEntry(image.getValue(), canonicalZipImageEntry(image.getKey()), zip);
                     completed++;
-                    notifyCompression(completed, imageFiles.length, copied, totalBytes);
+                    notifyCompression(completed, imageFilesById.size(), copied, totalBytes);
                 }
                 zip.finish();
             }
@@ -505,6 +509,19 @@ public class BackupExportPlugin extends Plugin {
 
     private boolean isSafeBackupPath(String path) {
         return "manifest.json".equals(path) || (path != null && IMAGE_PATH.matcher(path).matches());
+    }
+
+    /** Converts one physical provider filename to its strict logical SHA-256 ID. */
+    static String logicalImageId(String name) {
+        if (name == null) return null;
+        java.util.regex.Matcher matcher = IMAGE_NAME.matcher(name);
+        if (!matcher.matches()) return null;
+        return matcher.group(1);
+    }
+
+    static String canonicalZipImageEntry(String name) {
+        String id = logicalImageId(name);
+        return id == null ? null : "images/" + id;
     }
 
     private boolean isBackupFolder(String folderName) {

@@ -1,6 +1,6 @@
 import { unzipSync, zip, strFromU8, strToU8 } from 'fflate';
 import { z } from 'zod';
-import { db, detectMime, sha256, imageDimensions, type LibraryDB } from './library';
+import { db, detectMime, sha256, imageDimensions, SUPPORTED_IMAGE_EXTENSIONS, type LibraryDB } from './library';
 import type { Meme } from '../types';
 
 export const MAX_ARCHIVE = 256 * 1024 * 1024;
@@ -8,7 +8,23 @@ export const MAX_EXPANDED = 512 * 1024 * 1024;
 export const MAX_SINGLE_FILE = 32 * 1024 * 1024;
 export const MAX_ENTRIES = 10002;
 const IMAGE_ID = /^[a-f0-9]{64}$/;
-const BACKUP_IMAGE_KEY = /^images\/[a-f0-9]{64}$/;
+const BACKUP_IMAGE_KEY = /^images\/([a-f0-9]{64})(?:\.([a-z0-9]+))?$/i;
+/**
+ * Android's DocumentsProvider may append an extension when createFile() is
+ * given an image MIME type. This is a physical-name compatibility layer; the
+ * manifest ID remains the lowercase SHA-256 captured by IMAGE_ID.
+ */
+export const SUPPORTED_BACKUP_IMAGE_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS;
+export function isSupportedBackupImageExtension(extension: string) {
+  return SUPPORTED_BACKUP_IMAGE_EXTENSIONS.has(extension.toLowerCase());
+}
+export function logicalBackupImageId(name: string): string | undefined {
+  const match = /^(?<id>[a-f0-9]{64})(?:\.(?<extension>[a-z0-9]+))?$/i.exec(name);
+  if (!match || !IMAGE_ID.test(match.groups?.id ?? '')) return undefined;
+  const extension = match.groups?.extension;
+  if (extension && !isSupportedBackupImageExtension(extension)) return undefined;
+  return match.groups?.id;
+}
 const timestamp = z.number().int().nonnegative().max(8640000000000000);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 
@@ -234,20 +250,22 @@ function isIllegalEntryPath(name: string) {
 }
 
 /**
- * Only these two shapes may hold backup payload, so nothing else is ever read
+ * Only these two shapes may hold backup payload (with an optional supported
+ * image extension on the logical hash), so nothing else is ever read
  * into memory. Nested names still qualify because a hand-made archive usually
  * keeps the exported `xinyu-backup-*` wrapper folder around the payload.
  */
 export function isBackupImagePath(name: string) {
   // Keep this deliberately permissive about a single wrapper. The complete
   // path (including the wrapper decision) is validated by normalizeBackupLayout.
-  return /(?:^|\/)images\/[a-f0-9]{64}$/.test(name);
+  const match = /(?:^|\/)images\/(?<name>[^/]+)$/.exec(name);
+  return Boolean(match && logicalBackupImageId(match.groups?.name ?? ''));
 }
 
 function isCandidateBackupFile(name: string) {
   if (!name || name.endsWith('/')) return false;
   const base = name.split('/').pop() ?? name;
-  return base === 'manifest.json' || IMAGE_ID.test(base);
+  return base === 'manifest.json' || Boolean(logicalBackupImageId(base));
 }
 
 export type BackupLayout = {
@@ -315,9 +333,10 @@ export function normalizeBackupLayout(names: string[]): BackupLayout {
     // silently merged backup roots.
     const relative = root ? (name.startsWith(root) ? name.slice(root.length) : undefined) : name;
     if (manifestKey && name === manifestKey) continue;
-    if (relative && BACKUP_IMAGE_KEY.test(relative)) {
-      const id = relative.slice('images/'.length);
-      if (!images.has(id)) { images.set(id, name); continue; }
+    const imageMatch = relative ? BACKUP_IMAGE_KEY.exec(relative) : undefined;
+    if (imageMatch) {
+      const id = logicalBackupImageId(imageMatch[1] + (imageMatch[2] ? `.${imageMatch[2]}` : ''));
+      if (id && !images.has(id)) { images.set(id, name); continue; }
     }
     unknown.push(name);
   }

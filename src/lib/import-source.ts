@@ -1,17 +1,17 @@
 import { strFromU8, unzipSync } from 'fflate';
-import { describeBackupLayoutProblem, isBackupImagePath, normalizeBackupLayout, parseBackupManifest, readBackup, type Backup, type BackupManifest } from './backup';
+import { describeBackupLayoutProblem, isBackupImagePath, isSupportedBackupImageExtension, normalizeBackupLayout, parseBackupManifest, readBackup, type Backup, type BackupManifest } from './backup';
 import { sha256, type PrefilledImage } from './library';
 
 const MAX_IMPORT_ARCHIVE = 256 * 1024 * 1024;
 const MAX_IMPORT_EXPANDED = 512 * 1024 * 1024;
 const MAX_IMPORT_ENTRIES = 5000;
 
-const IMAGE_NAME = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 // A 心语 backup stores originals as `images/<sha256>` with no extension, so an
 // extension check alone would silently drop every image of a real backup.
 
 export function isSupportedImageName(name: string) {
-  return IMAGE_NAME.test(name);
+  const extension = name.split('.').pop();
+  return Boolean(extension && extension !== name && isSupportedBackupImageExtension(extension));
 }
 
 export function isImportableImageEntry(name: string) {

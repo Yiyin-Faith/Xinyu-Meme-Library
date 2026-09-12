@@ -56,6 +56,19 @@ describe('Android backup export', () => {
     expect(await db.backupBaselines.get('latest')).toBeDefined();
   });
 
+  it('returns complete with both raw and ZIP locations after normal compression', async () => {
+    await db.memes.add(await testMeme('原始目录由 provider 写入扩展名'));
+    const result = await exportAndroidBackup(await plan('full'), () => undefined, true);
+
+    expect(result).toMatchObject({
+      kind: 'complete',
+      rawLocation: '测试目录 / xinyu-backup-2026-09-12-120000',
+      zipLocation: '测试目录 / backup.zip',
+      zipName: 'xinyu-backup-2026-09-12-120000.puff.zip',
+    });
+    expect(await db.backupBaselines.get('latest')).toBeDefined();
+  });
+
   it('keeps the baseline when optional native ZIP compression fails', async () => {
     await db.memes.add(await testMeme('压缩失败仍有效'));
     native.compress.mockRejectedValueOnce(new Error('模拟 ZIP 压缩失败'));

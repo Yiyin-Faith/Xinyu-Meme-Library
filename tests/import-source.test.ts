@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { analyzeImportEntries, analyzeImportZip, baseName, isSupportedImageName, requiredCollections } from '../src/lib/import-source';
 import { sha256 } from '../src/lib/library';
+import { normalizeBackupLayout } from '../src/lib/backup';
 
 // Node has no Image/canvas; readBackup() only needs naturalWidth/Height.
 beforeAll(() => {
@@ -19,12 +20,12 @@ beforeAll(() => {
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const pngBlob = () => new Blob([PNG_BYTES], { type: 'image/png' });
 
-async function manifestFor(id: string, size: number) {
+async function manifestFor(id: string, size: number, mime: 'image/png' | 'image/webp' = 'image/png') {
   return {
     format: 'puff-library', version: 1, exportedAt: 1,
     memes: [{
       id, title: '来自清单的名称', tags: ['分类A', '分类B'], note: '清单里的备注', collectionId: 'grp1', favorite: true,
-      createdAt: 5, updatedAt: 5, lastUsedAt: 7, useCount: 3, mime: 'image/png', size, width: 1, height: 1, source: '清单来源',
+      createdAt: 5, updatedAt: 5, lastUsedAt: 7, useCount: 3, mime, size, width: 1, height: 1, source: '清单来源',
     }],
     collections: [{ id: 'grp1', name: '游戏', color: '#9cb99a', updatedAt: 1 }],
     tombstones: [],
@@ -136,6 +137,83 @@ describe('folder / ZIP import analysis', () => {
     expect(analysis.kind).toBe('manifest');
     if (analysis.kind !== 'manifest') return;
     expect(analysis.matched).toBe(1);
+  });
+
+  it('recognises a real Android provider wrapper with an auto-appended .webp name', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = await manifestFor(id, blob.size);
+    const archive = new Blob([zipSync({
+      'xinyu-backup-2026-09-13-012549/manifest.json': strToU8(JSON.stringify(manifest)),
+      [`xinyu-backup-2026-09-13-012549/images/${id}.webp`]: PNG_BYTES,
+    })], { type: 'application/zip' });
+
+    const analysis = await analyzeImportZip(archive);
+
+    expect(analysis.kind).toBe('manifest');
+    if (analysis.kind !== 'manifest') return;
+    expect(analysis.matched).toBe(1);
+    expect(await sha256(analysis.items[0].blob)).toBe(id);
+    expect(analysis.backup?.images[0]).toMatchObject({ id });
+  });
+
+  it('recognises a selected raw backup root with an auto-appended .webp name', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = await manifestFor(id, blob.size);
+    const analysis = await analyzeImportEntries([
+      { name: 'manifest.json', blob: new Blob([JSON.stringify(manifest)], { type: 'application/json' }) },
+      { name: `images/${id}.webp`, blob },
+    ]);
+    expect(analysis.kind).toBe('manifest');
+    if (analysis.kind !== 'manifest') return;
+    expect(analysis.matched).toBe(1);
+  });
+
+  it('canonicalizes pure hash and supported physical extensions to one logical id', () => {
+    const id = 'a'.repeat(64);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}`]).images.get(id)).toBe(`images/${id}`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.png`]).images.get(id)).toBe(`images/${id}.png`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.jpg`]).images.get(id)).toBe(`images/${id}.jpg`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.jpeg`]).images.get(id)).toBe(`images/${id}.jpeg`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.gif`]).images.get(id)).toBe(`images/${id}.gif`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.avif`]).images.get(id)).toBe(`images/${id}.avif`);
+    expect(normalizeBackupLayout(['manifest.json', `images/${id}.svg`]).images.get(id)).toBe(`images/${id}.svg`);
+  });
+
+  it('rejects duplicate logical IDs, unknown extensions and invalid hash basenames', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = new Blob([JSON.stringify(await manifestFor(id, blob.size))]);
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest },
+      { name: `images/${id}`, blob },
+      { name: `images/${id}.webp`, blob },
+    ])).rejects.toThrow('未知文件');
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest },
+      { name: `images/${id}.png`, blob },
+      { name: `images/${id}.webp`, blob },
+    ])).rejects.toThrow('未知文件');
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest },
+      { name: `images/${id}.exe`, blob },
+    ])).rejects.toThrow('未知文件');
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest },
+      { name: 'images/foo.webp', blob },
+    ])).rejects.toThrow('未知文件');
+  });
+
+  it('keeps MIME validation authoritative when a physical extension claims webp', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = await manifestFor(id, blob.size, 'image/webp');
+    const archive = new Blob([zipSync({
+      'manifest.json': strToU8(JSON.stringify(manifest)),
+      [`images/${id}.webp`]: PNG_BYTES,
+    })], { type: 'application/zip' });
+    await expect(analyzeImportZip(archive)).rejects.toThrow('图片格式校验失败');
   });
 
   it('rejects illegal, unknown and duplicate manifest entries for backup-like folders', async () => {
