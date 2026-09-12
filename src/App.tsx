@@ -12,6 +12,7 @@ import { db, defaultSettings, deleteMemes, ensureCollections, formatBytes, getOr
 import { commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, readBackup, type BackupMode, type ExportProgress } from './lib/backup';
 import { analyzeImportEntries, analyzeImportZip, requiredCollections, type ImportAnalysis } from './lib/import-source';
 import { AndroidBackupCopyError, exportAndroidBackup, notifyAndroidTask, type AndroidBackupProgress } from './lib/android-backup';
+import { isAndroidFolderRestoreAvailable, pickAndroidBackupFolder, readAndroidBackupFolder } from './lib/android-restore';
 import { canEditImage, clampCrop, editedDimensions, fullCrop, isNoopEdit, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
 import { dismissTask, failTask, finishTask, startTask, updateTask, useTasks, type BackgroundTask, type TaskProgress } from './lib/tasks';
 import { fetchOnlineImage, searchOnline } from './lib/online';
@@ -20,7 +21,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.6.5';
+const CURRENT_VERSION = '0.6.6';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -477,6 +478,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.6.6</strong><ul><li>恢复入口拆成「从 ZIP 恢复」和「从备份文件夹恢复」：Android 可以直接选择未压缩的备份目录，不再需要先手动打包 ZIP。</li><li>手动压缩的备份 ZIP 现在可以正常识别：允许顶层 images/ 目录项和单一 xinyu-backup-* 外层文件夹（重命名过的文件夹也可以）。</li><li>非法路径、未知文件、多个无关根目录、缺少 manifest、manifest 格式错误、原图缺失、hash 校验失败、增量缺少基准各自给出明确提示，不再统一显示「备份包含未知路径」。</li><li>ZIP 与备份文件夹共用同一套校验与合并逻辑，恢复结果完全一致。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.5</strong><ul><li>备份导出支持完整与增量：以最近一次有效 manifest 为基准，只写新增原图与变化的元数据、收藏夹和删除记录；无变化时不会生成空备份。</li><li>导出进度会基于平滑后的实际处理速度显示预计剩余时间；Android 原始备份写完 manifest 后即成为有效基准，ZIP 失败也不影响。</li><li>PNG、JPG 和 WebP 可在本机进行基础裁切与 90° 旋转，支持覆盖原图或另存为；GIF、SVG 和 AVIF 保持原格式，不会被扁平化。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.5</strong><ul><li>修复 Android 输入关键词推荐打开无障碍设置时的回调报错：设置页不再依赖不稳定的 Activity 返回结果，回到心语后会读取实际授权状态并自动同步开关。</li><li>迷你表情库只保留搜索、常用和现有标签；自动推荐仍仅在命中你自己的标签时触发，不提供单独的推荐页。</li><li>超长图片文件名现在会自动换行；即使没有空格也不会横向溢出。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.4</strong><ul><li>修复 Android 迷你表情库与主图库不同步的问题：当前 IndexedDB 页面通过原生回调交付，服务重启后仍可用私有元数据与按页缩略图恢复。</li><li>迷你表情库精简为搜索、常用、标签和图片网格；展开面板保持清晰不透明，悬浮球透明度仍可单独调节。</li><li>输入关键词推荐改用心语风格的隐私说明；确认前有 1 秒防误触，并优先跳转到对应无障碍服务设置、返回后自动同步授权状态。</li></ul></section>
@@ -820,9 +822,9 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     }
     finally { setBusy(false); }
   };
-  const restore = async (file: File) => {
+  const restoreZip = async (file: File) => {
     setBusy(true);
-    const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从备份恢复', label: '正在校验备份文件…', detail: file.name, badge: '准备中', percentage: 0, indeterminate: true });
+    const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从 ZIP 恢复', label: '正在校验备份文件…', detail: file.name, badge: '准备中', percentage: 0, indeterminate: true });
     try {
       const backup = await readBackup(file);
       updateTask(taskId, { label: '正在合并到当前图库…', badge: '处理中' });
@@ -838,8 +840,37 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     }
     finally { setBusy(false); }
   };
+  /**
+   * Android restore straight from an uncompressed backup folder. The picker
+   * hands back a `content://` tree, the native side streams each file, and the
+   * ZIP path's whitelist and checks are reused unchanged.
+   */
+  const restoreFolder = async () => {
+    setBusy(true);
+    const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从备份文件夹恢复', label: '请选择备份文件夹…', detail: '', badge: '等待选择', percentage: 0, indeterminate: true });
+    try {
+      const folder = await pickAndroidBackupFolder();
+      if (!folder) { dismissTask(taskId); onNotify('已取消选择备份文件夹'); return; }
+      updateTask(taskId, { label: '正在校验备份…', detail: folder.location, badge: '校验中' });
+      const backup = await readAndroidBackupFolder(folder, (completed, total) => {
+        const percentage = total ? Math.round((completed / total) * 100) : 0;
+        updateTask(taskId, { label: `正在校验图片 ${completed} / ${total}`, badge: total ? `${percentage}%` : '校验中', percentage, indeterminate: !total });
+      });
+      updateTask(taskId, { label: '正在合并到当前图库…', badge: '处理中', indeterminate: true });
+      const result = await mergeBackup(backup, deletions, restoreSettings);
+      const summary = `新增 ${result.added}，更新 ${result.updated}，跳过 ${result.skipped}`;
+      finishTask(taskId, { label: '恢复完成', detail: summary, notification: `备份恢复完成：${summary}` });
+      onNotify(`恢复完成：${summary}`);
+      onClose();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '恢复失败，未修改本地库';
+      failTask(taskId, message, { label: '恢复失败，未修改本地库' });
+      onNotify(message);
+    }
+    finally { setBusy(false); }
+  };
   const exportButtonText = busy ? exportPhase === 'selecting' ? '选择位置…' : exportPhase === 'collecting' || exportPhase === 'copying' ? '正在复制…' : exportPhase === 'packing' || exportPhase === 'compressing' ? '正在压缩…' : '正在保存…' : exportPhase === 'complete' || exportPhase === 'raw' || exportPhase === 'raw-only' ? '再次导出' : '导出';
-  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会继续逐张写入外部备份目录；ZIP 压缩失败时原始备份与增量基准仍然有效。导出时可以关闭本窗口，进度会留在右下角。' : '完整或增量 .puff.zip 都可跨 Windows 和 Android 恢复。导出时可以关闭本窗口，进度会留在右下角。'} onClose={onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div className="backup-export-content"><strong>导出备份</strong><span>{backupMode === 'full' ? '完整导出当前图库及 manifest。' : '只导出上次有效备份后的新增、变化和删除记录。'}</span><div className="backup-type-choice" role="radiogroup" aria-label="备份类型"><label className={backupMode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" checked={backupMode === 'full'} disabled={busy} onChange={() => setBackupMode('full')} />完整备份</label><label className={`${backupMode === 'incremental' ? 'selected' : ''} ${canIncremental ? '' : 'disabled'}`}><input type="radio" name="backup-mode" checked={backupMode === 'incremental'} disabled={busy || !canIncremental} onChange={() => setBackupMode('incremental')} />增量备份</label></div><small className="backup-baseline-note">{canIncremental ? '以最近一次成功写入的 manifest 为基准。' : '请先执行一次完整备份，才能使用增量备份。'}</small><label className={`backup-zip-choice ${!isAndroid ? 'disabled' : ''}`}><input type="checkbox" checked={packZip} disabled={busy || !isAndroid} onChange={(event) => setPackZip(event.target.checked)} />打包 ZIP {!isAndroid && <small>（此平台仅支持 ZIP）</small>}</label></div><button className="primary-button" disabled={busy} onClick={() => { void create(); }}><Download size={15} /> {exportButtonText}</button></div>{busy && <p className="backup-running-hint">导出在后台继续，可关闭窗口或切到其他页面，右下角会一直显示进度。</p>}{activeTask && <div className="modal-task"><TaskCard task={activeTask} /></div>}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div><strong>从备份恢复</strong><span>先完整校验，再合并到当前库；增量备份需要先恢复它所依赖的完整备份。</span></div><button className="glass-button" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /> 选择 ZIP</button><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 经过路径、大小、图片格式和 SHA-256 校验；不接受未知文件或超大压缩包。</p></div></Modal>;
+  return <Modal title="导入与同步" subtitle={isAndroid ? 'Android 会继续逐张写入外部备份目录；ZIP 压缩失败时原始备份与增量基准仍然有效。导出时可以关闭本窗口，进度会留在右下角。' : '完整或增量 .puff.zip 都可跨 Windows 和 Android 恢复。导出时可以关闭本窗口，进度会留在右下角。'} onClose={onClose}><div className="backup-modal"><div className="backup-option primary-option"><div className="backup-icon"><ArrowUpFromLine size={20} /></div><div className="backup-export-content"><strong>导出备份</strong><span>{backupMode === 'full' ? '完整导出当前图库及 manifest。' : '只导出上次有效备份后的新增、变化和删除记录。'}</span><div className="backup-type-choice" role="radiogroup" aria-label="备份类型"><label className={backupMode === 'full' ? 'selected' : ''}><input type="radio" name="backup-mode" checked={backupMode === 'full'} disabled={busy} onChange={() => setBackupMode('full')} />完整备份</label><label className={`${backupMode === 'incremental' ? 'selected' : ''} ${canIncremental ? '' : 'disabled'}`}><input type="radio" name="backup-mode" checked={backupMode === 'incremental'} disabled={busy || !canIncremental} onChange={() => setBackupMode('incremental')} />增量备份</label></div><small className="backup-baseline-note">{canIncremental ? '以最近一次成功写入的 manifest 为基准。' : '请先执行一次完整备份，才能使用增量备份。'}</small><label className={`backup-zip-choice ${!isAndroid ? 'disabled' : ''}`}><input type="checkbox" checked={packZip} disabled={busy || !isAndroid} onChange={(event) => setPackZip(event.target.checked)} />打包 ZIP {!isAndroid && <small>（此平台仅支持 ZIP）</small>}</label></div><button className="primary-button" disabled={busy} onClick={() => { void create(); }}><Download size={15} /> {exportButtonText}</button></div>{busy && <p className="backup-running-hint">导出在后台继续，可关闭窗口或切到其他页面，右下角会一直显示进度。</p>}{activeTask && <div className="modal-task"><TaskCard task={activeTask} /></div>}<div className="backup-option"><div className="backup-icon"><ArrowDownToLine size={20} /></div><div className="backup-restore-content"><strong>从备份恢复</strong><span>先完整校验，再合并到当前库；增量备份需要先恢复它所依赖的完整备份。心语导出的 ZIP、手动压缩的备份 ZIP、未压缩的备份文件夹都可以直接恢复。</span></div><div className="backup-restore-actions"><button className="glass-button" disabled={busy} onClick={() => { const el = input.current; if (!el) return; el.value = ''; el.click(); }}><Archive size={15} /> 从 ZIP 恢复</button>{isAndroidFolderRestoreAvailable && <button className="glass-button" disabled={busy} onClick={() => { void restoreFolder(); }}><FolderPlus size={15} /> 从备份文件夹恢复</button>}</div><input ref={input} hidden type="file" accept=".zip,.puff.zip,application/zip" onChange={(e) => e.target.files?.[0] && restoreZip(e.target.files[0])} /></div><div className="backup-settings"><SettingToggle title="同步删除记录" description="把备份中明确删除的表情也从本机移除。" value={deletions} onChange={setDeletions} /><SettingToggle title="恢复偏好设置" description="同时恢复紧凑网格、动效、在线补充和悬浮窗开关。" value={restoreSettings} onChange={setRestoreSettings} /></div><p className="backup-footnote"><Info size={14} /> ZIP 与备份文件夹都经过路径、大小、图片格式和 SHA-256 校验；不接受非法路径、未知文件、超大图片或超大压缩包。</p></div></Modal>;
 }
 
 export default App;

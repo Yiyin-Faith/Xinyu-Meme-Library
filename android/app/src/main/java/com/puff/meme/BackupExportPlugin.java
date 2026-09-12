@@ -20,6 +20,8 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONArray;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
@@ -41,12 +43,18 @@ import java.util.zip.ZipOutputStream;
 @CapacitorPlugin(name = "BackupExport")
 public class BackupExportPlugin extends Plugin {
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final int MAX_CHUNK_BYTES = 1024 * 1024;
+    private static final int MAX_FOLDER_ENTRIES = 5000;
+    private static final int MAX_FOLDER_DEPTH = 3;
     private static final String TASK_CHANNEL_ID = "xinyu-background-tasks";
     private static final Pattern BACKUP_FOLDER = Pattern.compile("xinyu-backup-[0-9-]{17}(?:-[0-9]{1,2})?");
     private static final Pattern IMAGE_PATH = Pattern.compile("images/[a-f0-9]{64}");
     private static final Pattern IMAGE_NAME = Pattern.compile("[a-f0-9]{64}");
     private static final Pattern ZIP_NAME = Pattern.compile("xinyu-backup-[0-9-]{17}\\.puff\\.zip");
+    /** Control characters, backslashes and parent-segment traversal. */
+    private static final Pattern UNSAFE_RELATIVE_PATH = Pattern.compile("[\\u0000-\\u001f\\\\]|\\.\\.");
     private final Map<String, OutputStream> writers = new ConcurrentHashMap<>();
+    private final Map<String, InputStream> readers = new ConcurrentHashMap<>();
 
     @PluginMethod
     public void chooseDirectory(PluginCall call) {
@@ -216,10 +224,128 @@ public class BackupExportPlugin extends Plugin {
         }
     }
 
+    /**
+     * Restore side: lets the user pick a backup folder. The tree URI stays a
+     * persisted `content://` grant and is never rewritten into a real path.
+     */
+    @PluginMethod
+    public void chooseBackupFolder(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        startActivityForResult(call, intent, "backupFolderSelected");
+    }
+
+    @ActivityCallback
+    private void backupFolderSelected(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            JSObject response = new JSObject();
+            response.put("cancelled", true);
+            call.resolve(response);
+            return;
+        }
+        try {
+            Intent resultIntent = result.getData();
+            Uri treeUri = resultIntent.getData();
+            int grantFlags = resultIntent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+            if (grantFlags == 0) throw new IOException("没有获得该文件夹的读取权限");
+            getContext().getContentResolver().takePersistableUriPermission(treeUri, grantFlags);
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
+            if (root == null || !root.isDirectory() || !root.canRead()) throw new IOException("无法读取所选文件夹");
+            DocumentFile backupRoot = findBackupRoot(root);
+            String prefix = backupRoot != root && backupRoot.getName() != null ? backupRoot.getName() + "/" : "";
+            JSONArray entries = new JSONArray();
+            collectEntries(backupRoot, prefix, entries, 0);
+            JSObject response = new JSObject();
+            response.put("cancelled", false);
+            response.put("treeUri", treeUri.toString());
+            response.put("location", root.getName() == null || root.getName().isEmpty() ? "所选文件夹" : root.getName());
+            response.put("entries", entries);
+            call.resolve(response);
+        } catch (Exception error) {
+            call.reject("无法读取备份文件夹：" + message(error), error);
+        }
+    }
+
+    @PluginMethod
+    public void openFileForRead(PluginCall call) {
+        try {
+            String treeUri = required(call, "treeUri");
+            String path = required(call, "path");
+            if (!isSafeRelativePath(path)) throw new IOException("备份文件路径不正确");
+            DocumentFile root = DocumentFile.fromTreeUri(getContext(), Uri.parse(treeUri));
+            if (root == null || !root.isDirectory() || !root.canRead()) throw new IOException("备份文件夹已不可读，请重新选择");
+            DocumentFile file = resolveFile(root, path);
+            if (file == null || !file.isFile()) throw new IOException("备份文件已不存在：" + path);
+            InputStream stream = getContext().getContentResolver().openInputStream(file.getUri());
+            if (stream == null) throw new IOException("无法打开备份文件");
+            String readerId = UUID.randomUUID().toString();
+            readers.put(readerId, new BufferedInputStream(stream, BUFFER_SIZE));
+            JSObject response = new JSObject();
+            response.put("readerId", readerId);
+            response.put("size", file.length());
+            call.resolve(response);
+        } catch (Exception error) {
+            call.reject("无法读取备份文件：" + message(error), error);
+        }
+    }
+
+    @PluginMethod
+    public void readChunk(PluginCall call) {
+        String readerId = call.getString("readerId");
+        InputStream stream = readerId == null ? null : readers.get(readerId);
+        if (stream == null) {
+            call.reject("备份读取会话已失效");
+            return;
+        }
+        int length = call.getInt("length", BUFFER_SIZE);
+        if (length <= 0 || length > MAX_CHUNK_BYTES) length = BUFFER_SIZE;
+        try {
+            byte[] buffer = new byte[length];
+            int filled = 0;
+            while (filled < length) {
+                int read = stream.read(buffer, filled, length - filled);
+                if (read == -1) break;
+                filled += read;
+            }
+            boolean done = filled < length;
+            JSObject response = new JSObject();
+            response.put("data", filled == 0 ? "" : Base64.encodeToString(buffer, 0, filled, Base64.NO_WRAP));
+            response.put("done", done);
+            if (done) closeReaderStream(readerId);
+            call.resolve(response);
+        } catch (Exception error) {
+            try {
+                closeReaderStream(readerId);
+            } catch (IOException ignored) {
+                // The original read error is the useful one to surface.
+            }
+            call.reject("读取备份数据失败：" + message(error), error);
+        }
+    }
+
+    @PluginMethod
+    public void closeReader(PluginCall call) {
+        String readerId = call.getString("readerId");
+        if (readerId == null) {
+            call.reject("备份读取会话已失效");
+            return;
+        }
+        try {
+            closeReaderStream(readerId);
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("关闭备份文件失败：" + message(error), error);
+        }
+    }
+
     @Override
     protected void handleOnDestroy() {
         for (String writerId : writers.keySet()) {
             try { closeWriter(writerId); } catch (IOException ignored) { }
+        }
+        for (String readerId : readers.keySet()) {
+            try { closeReaderStream(readerId); } catch (IOException ignored) { }
         }
     }
 
@@ -305,6 +431,66 @@ public class BackupExportPlugin extends Plugin {
         DocumentFile folder = root.findFile(folderName);
         if (folder == null || !folder.isDirectory() || !folder.canWrite()) throw new IOException("原始备份目录已不可用");
         return folder;
+    }
+
+    /**
+     * The user may pick the backup folder itself or the folder that contains
+     * it. Only a single, unambiguous wrapper is descended into; every reported
+     * path is still re-validated by the shared web-side whitelist.
+     */
+    private DocumentFile findBackupRoot(DocumentFile root) {
+        if (root.findFile("manifest.json") != null) return root;
+        DocumentFile only = null;
+        for (DocumentFile child : root.listFiles()) {
+            if (!child.isDirectory() || child.findFile("manifest.json") == null) continue;
+            if (only != null) return root;
+            only = child;
+        }
+        return only == null ? root : only;
+    }
+
+    private void collectEntries(DocumentFile dir, String prefix, JSONArray out, int depth) {
+        if (depth > MAX_FOLDER_DEPTH) return;
+        for (DocumentFile child : dir.listFiles()) {
+            if (out.length() >= MAX_FOLDER_ENTRIES) return;
+            String name = child.getName();
+            if (name == null || name.isEmpty()) continue;
+            String path = prefix.isEmpty() ? name : prefix + name;
+            if (child.isDirectory()) {
+                collectEntries(child, path + "/", out, depth + 1);
+            } else if (child.isFile()) {
+                JSObject entry = new JSObject();
+                entry.put("path", path);
+                entry.put("size", child.length());
+                out.put(entry);
+            }
+        }
+    }
+
+    private void closeReaderStream(String readerId) throws IOException {
+        InputStream stream = readers.remove(readerId);
+        if (stream == null) return;
+        stream.close();
+    }
+
+    /**
+     * Blacklist rather than whitelist: a hand-made backup folder is very often
+     * named in Chinese, so any non-control character has to stay allowed.
+     */
+    private boolean isSafeRelativePath(String path) {
+        if (path == null || path.isEmpty() || path.length() > 300) return false;
+        if (path.startsWith("/") || path.endsWith("/") || path.contains("//")) return false;
+        return !UNSAFE_RELATIVE_PATH.matcher(path).find();
+    }
+
+    private DocumentFile resolveFile(DocumentFile root, String path) {
+        DocumentFile current = root;
+        for (String segment : path.split("/")) {
+            if (segment.isEmpty()) return null;
+            current = current.findFile(segment);
+            if (current == null) return null;
+        }
+        return current;
     }
 
     private DocumentFile createUniqueDirectory(DocumentFile root, String preferredName) {

@@ -303,6 +303,8 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 .replace-confirm p { margin: 0; color: #7c8d83; font-size: 12px; line-height: 1.6; }
 .replace-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .backup-export-content { min-width: 0; }
+.backup-restore-content { min-width: 0; }
+.backup-restore-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .backup-type-choice { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
 .backup-type-choice label { display: inline-flex !important; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid rgba(93, 137, 104, .22); border-radius: 8px; color: #718a7a; background: rgba(255,255,255,.55); font-size: 11px !important; font-weight: 700; cursor: pointer; }
 .backup-type-choice label.selected { border-color: rgba(82, 143, 99, .5); color: #4e805d; background: rgba(209, 237, 215, .85); }
@@ -316,6 +318,7 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
   .crop-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .backup-option.primary-option { grid-template-columns: 39px minmax(0, 1fr); align-items: start; }
   .backup-option.primary-option > .primary-button { grid-column: 2; justify-self: start; }
+  .backup-option > .backup-restore-actions { grid-column: 2; justify-self: start; }
 }
 
 .drop-zone-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 9px; }
