@@ -173,6 +173,17 @@ export function backupManifestText(snapshot: BackupSnapshot) {
   return JSON.stringify(snapshot.manifest, null, 2);
 }
 
+/**
+ * Shared manifest reader for both flows that can meet a 心语 manifest:
+ * batch import (merge into the current library) and backup restore (restore
+ * per full/incremental semantics). Returning `undefined` instead of throwing
+ * lets batch import degrade to plain image import.
+ */
+export function parseBackupManifest(value: unknown): BackupManifest | undefined {
+  const result = schema.safeParse(value);
+  return result.success ? result.data : undefined;
+}
+
 export async function exportBackupPlan(plan: ReadyBackupExportPlan, database: LibraryDB = db, onProgress?: (progress: ExportProgress) => void): Promise<Blob> {
   const snapshot = plan.snapshot;
   const images = snapshot.manifest.memes.filter((meme) => meme.imageIncluded !== false);

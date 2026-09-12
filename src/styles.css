@@ -317,3 +317,25 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
   .backup-option.primary-option { grid-template-columns: 39px minmax(0, 1fr); align-items: start; }
   .backup-option.primary-option > .primary-button { grid-column: 2; justify-self: start; }
 }
+
+.drop-zone-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 9px; }
+.drop-zone-actions .primary-button, .drop-zone-actions .glass-button { min-height: 40px; }
+.drop-zone-note { max-width: 430px; color: #9fb0a6; font-size: 10px; line-height: 1.55; }
+.folder-import { display: grid; gap: 14px; }
+.folder-import-pickers { display: flex; flex-wrap: wrap; gap: 9px; }
+.folder-import-pickers .glass-button { min-height: 40px; }
+.folder-import-status { margin: 0; color: #8b9d92; font-size: 12px; line-height: 1.55; }
+.folder-import-status.error { color: #b0736b; }
+.folder-import-summary { display: grid; gap: 5px; padding: 13px 15px; border: 1px solid rgba(93, 137, 104, .18); border-radius: 14px; background: rgba(226, 243, 229, .56); }
+.folder-import-summary strong { color: #50705d; font-size: 13px; }
+.folder-import-summary span { color: #7f9488; font-size: 11px; line-height: 1.55; }
+.folder-import-summary small { color: #93a79b; font-size: 10px; line-height: 1.5; }
+.folder-import-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.import-switch { margin-right: auto; align-self: center; }
+@media (max-width: 480px) {
+  .folder-import-actions { flex-direction: column-reverse; }
+  .folder-import-actions .primary-button, .folder-import-actions .glass-button { width: 100%; }
+  .folder-import-actions .import-switch { order: 1; width: auto; margin-right: 0; }
+  .drop-zone-actions { flex-direction: column; width: 100%; }
+  .drop-zone-actions .primary-button, .drop-zone-actions .glass-button { width: 100%; }
+}
