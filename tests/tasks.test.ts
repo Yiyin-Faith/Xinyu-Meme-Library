@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dismissTask, failTask, finishTask, getTasks, resetTasks, startTask, subscribe, updateTask } from '../src/lib/tasks';
 
-afterEach(() => resetTasks());
+afterEach(() => { resetTasks(); vi.useRealTimers(); });
 
 describe('background task store', () => {
   it('starts a running task and exposes it to subscribers', () => {
@@ -76,5 +76,31 @@ describe('background task store', () => {
       finishTask(id);
     }
     expect(getTasks().some((task) => task.id === running && task.state === 'running')).toBe(true);
+  });
+
+  it('auto-dismisses settled tasks without removing a replacement with the same id', () => {
+    vi.useFakeTimers();
+    const id = startTask({ id: 'timed', kind: 'import', title: '导入', label: '', detail: '', badge: '', percentage: 0, indeterminate: true });
+    finishTask(id);
+    vi.advanceTimersByTime(3999);
+    expect(getTasks().some((task) => task.id === id)).toBe(true);
+
+    startTask({ id, kind: 'import', title: '再次导入', label: '', detail: '', badge: '', percentage: 0, indeterminate: true });
+    vi.advanceTimersByTime(1);
+    expect(getTasks().find((task) => task.id === id)?.state).toBe('running');
+
+    failTask(id, '失败');
+    vi.advanceTimersByTime(6999);
+    expect(getTasks().some((task) => task.id === id)).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(getTasks().some((task) => task.id === id)).toBe(false);
+  });
+
+  it('dismisses a completed task after the done TTL', () => {
+    vi.useFakeTimers();
+    const id = startTask({ id: 'done-ttl', kind: 'backup', title: '备份', label: '', detail: '', badge: '', percentage: 0, indeterminate: true });
+    finishTask(id);
+    vi.advanceTimersByTime(4000);
+    expect(getTasks().some((task) => task.id === id)).toBe(false);
   });
 });

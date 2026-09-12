@@ -3,10 +3,10 @@ import { z } from 'zod';
 import { db, detectMime, sha256, imageDimensions, type LibraryDB } from './library';
 import type { Meme } from '../types';
 
-const MAX_ARCHIVE = 256 * 1024 * 1024;
-const MAX_EXPANDED = 512 * 1024 * 1024;
-const MAX_SINGLE_FILE = 32 * 1024 * 1024;
-const MAX_ENTRIES = 10002;
+export const MAX_ARCHIVE = 256 * 1024 * 1024;
+export const MAX_EXPANDED = 512 * 1024 * 1024;
+export const MAX_SINGLE_FILE = 32 * 1024 * 1024;
+export const MAX_ENTRIES = 10002;
 const IMAGE_ID = /^[a-f0-9]{64}$/;
 const BACKUP_IMAGE_KEY = /^images\/[a-f0-9]{64}$/;
 const timestamp = z.number().int().nonnegative().max(8640000000000000);
@@ -238,6 +238,12 @@ function isIllegalEntryPath(name: string) {
  * into memory. Nested names still qualify because a hand-made archive usually
  * keeps the exported `xinyu-backup-*` wrapper folder around the payload.
  */
+export function isBackupImagePath(name: string) {
+  // Keep this deliberately permissive about a single wrapper. The complete
+  // path (including the wrapper decision) is validated by normalizeBackupLayout.
+  return /(?:^|\/)images\/[a-f0-9]{64}$/.test(name);
+}
+
 function isCandidateBackupFile(name: string) {
   if (!name || name.endsWith('/')) return false;
   const base = name.split('/').pop() ?? name;
@@ -254,6 +260,19 @@ export type BackupLayout = {
   /** Paths that look legal but are not part of a 心语 backup. */
   unknown: string[];
 };
+
+/** Applies the same folder member limits used while reading ZIP central data. */
+export function validateBackupEntryLimits(entries: readonly { size: number }[]) {
+  if (entries.length > MAX_ENTRIES) throw new Error('备份文件夹文件数超过限制，未修改本地表情库');
+  let total = 0;
+  for (const entry of entries) {
+    if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > MAX_SINGLE_FILE) {
+      throw new Error('备份文件夹包含超大或无效文件，未修改本地表情库');
+    }
+    total += entry.size;
+    if (total > MAX_EXPANDED) throw new Error('备份文件夹总大小超过限制，未修改本地表情库');
+  }
+}
 
 /**
  * Maps a ZIP entry list or folder file list onto the only two path shapes a
@@ -272,27 +291,41 @@ export function normalizeBackupLayout(names: string[]): BackupLayout {
     if (isArchiveJunk(name)) continue;
     files.push(name);
   }
-  // Strip exactly one wrapper folder, and only when it directly holds the
-  // manifest. A renamed folder still works; `images/` can never match.
-  let root = '';
-  if (files.length && files.every((name) => name.includes('/'))) {
-    const heads = new Set(files.map((name) => name.split('/')[0]));
-    if (heads.size === 1) {
-      const candidate = [...heads][0];
-      if (files.includes(`${candidate}/manifest.json`)) root = `${candidate}/`;
-    }
-  }
+  // The manifest is the anchor. There are exactly two accepted roots:
+  //   manifest.json + images/<hash>
+  //   <renamed-wrapper>/manifest.json + <renamed-wrapper>/images/<hash>
+  // Never infer a root from whether every entry happens to contain a slash;
+  // directory markers, metadata and hand-made archives routinely violate that
+  // assumption. A nested wrapper is intentionally not accepted.
+  const manifests = files.filter((name) => {
+    if (name === 'manifest.json') return true;
+    const parts = name.split('/');
+    return parts.length === 2 && parts[1] === 'manifest.json';
+  });
+  const manifestKey = manifests.length === 1 ? manifests[0] : undefined;
+  const root = manifestKey && manifestKey !== 'manifest.json'
+    ? manifestKey.slice(0, -'manifest.json'.length)
+    : '';
   const images = new Map<string, string>();
   const unknown: string[] = [];
-  let manifestKey: string | undefined;
   for (const name of files) {
-    const relative = root && name.startsWith(root) ? name.slice(root.length) : name;
-    if (relative === 'manifest.json' && !manifestKey) { manifestKey = name; continue; }
-    if (BACKUP_IMAGE_KEY.test(relative)) {
+    // When a wrapper was selected, entries outside that exact prefix are
+    // never allowed to fall back to a root-level interpretation. This is what
+    // prevents `wrapper/manifest.json` + `images/<hash>` from becoming two
+    // silently merged backup roots.
+    const relative = root ? (name.startsWith(root) ? name.slice(root.length) : undefined) : name;
+    if (manifestKey && name === manifestKey) continue;
+    if (relative && BACKUP_IMAGE_KEY.test(relative)) {
       const id = relative.slice('images/'.length);
       if (!images.has(id)) { images.set(id, name); continue; }
     }
     unknown.push(name);
+  }
+  // Multiple manifest candidates must never be silently interpreted as an
+  // image payload. They stay visible in `unknown`, producing the same strict
+  // rejection as any other unknown payload.
+  if (manifests.length !== 1) {
+    for (const name of manifests) if (!unknown.includes(name)) unknown.push(name);
   }
   return { manifestKey, images, illegal, unknown };
 }

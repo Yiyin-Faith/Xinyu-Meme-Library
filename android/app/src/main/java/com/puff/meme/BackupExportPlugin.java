@@ -252,15 +252,19 @@ public class BackupExportPlugin extends Plugin {
             getContext().getContentResolver().takePersistableUriPermission(treeUri, grantFlags);
             DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
             if (root == null || !root.isDirectory() || !root.canRead()) throw new IOException("无法读取所选文件夹");
-            DocumentFile backupRoot = findBackupRoot(root);
-            String prefix = backupRoot != root && backupRoot.getName() != null ? backupRoot.getName() + "/" : "";
             JSONArray entries = new JSONArray();
-            collectEntries(backupRoot, prefix, entries, 0);
+            // Native code deliberately does not guess which child is the
+            // backup root. JS owns the canonical layout rules, so return the
+            // complete selected tree as relative entries and let it identify
+            // root-level versus one-wrapper backups consistently with ZIP and
+            // browser folder imports.
+            boolean truncated = collectEntries(root, "", entries, 0);
             JSObject response = new JSObject();
             response.put("cancelled", false);
             response.put("treeUri", treeUri.toString());
             response.put("location", root.getName() == null || root.getName().isEmpty() ? "所选文件夹" : root.getName());
             response.put("entries", entries);
+            response.put("truncated", truncated);
             call.resolve(response);
         } catch (Exception error) {
             call.reject("无法读取备份文件夹：" + message(error), error);
@@ -433,31 +437,16 @@ public class BackupExportPlugin extends Plugin {
         return folder;
     }
 
-    /**
-     * The user may pick the backup folder itself or the folder that contains
-     * it. Only a single, unambiguous wrapper is descended into; every reported
-     * path is still re-validated by the shared web-side whitelist.
-     */
-    private DocumentFile findBackupRoot(DocumentFile root) {
-        if (root.findFile("manifest.json") != null) return root;
-        DocumentFile only = null;
-        for (DocumentFile child : root.listFiles()) {
-            if (!child.isDirectory() || child.findFile("manifest.json") == null) continue;
-            if (only != null) return root;
-            only = child;
-        }
-        return only == null ? root : only;
-    }
-
-    private void collectEntries(DocumentFile dir, String prefix, JSONArray out, int depth) {
-        if (depth > MAX_FOLDER_DEPTH) return;
+    private boolean collectEntries(DocumentFile dir, String prefix, JSONArray out, int depth) {
+        if (depth > MAX_FOLDER_DEPTH) return true;
+        boolean truncated = false;
         for (DocumentFile child : dir.listFiles()) {
-            if (out.length() >= MAX_FOLDER_ENTRIES) return;
+            if (out.length() >= MAX_FOLDER_ENTRIES) return true;
             String name = child.getName();
             if (name == null || name.isEmpty()) continue;
             String path = prefix.isEmpty() ? name : prefix + name;
             if (child.isDirectory()) {
-                collectEntries(child, path + "/", out, depth + 1);
+                truncated = collectEntries(child, path + "/", out, depth + 1) || truncated;
             } else if (child.isFile()) {
                 JSObject entry = new JSObject();
                 entry.put("path", path);
@@ -465,6 +454,7 @@ public class BackupExportPlugin extends Plugin {
                 out.put(entry);
             }
         }
+        return truncated;
     }
 
     private void closeReaderStream(String readerId) throws IOException {

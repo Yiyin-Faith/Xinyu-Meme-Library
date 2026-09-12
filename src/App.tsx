@@ -21,7 +21,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.6.6';
+const CURRENT_VERSION = '0.6.7';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -478,6 +478,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.6.7</strong><ul><li>备份路径现在按唯一 manifest 和 images/hash 根目录统一归一化，支持任意重命名的单层外包装；无扩展名原图可从文件夹、ZIP 或 SAF 文件夹恢复。</li><li>严格拒绝非法路径、多个备份根和未知备份 payload；Android SAF 只列举并流式读取文件，由 JS 统一校验。</li><li>后台任务完成或失败后会自动收起，运行中的任务会持续保留，手动关闭仍然有效。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.6</strong><ul><li>恢复入口拆成「从 ZIP 恢复」和「从备份文件夹恢复」：Android 可以直接选择未压缩的备份目录，不再需要先手动打包 ZIP。</li><li>手动压缩的备份 ZIP 现在可以正常识别：允许顶层 images/ 目录项和单一 xinyu-backup-* 外层文件夹（重命名过的文件夹也可以）。</li><li>非法路径、未知文件、多个无关根目录、缺少 manifest、manifest 格式错误、原图缺失、hash 校验失败、增量缺少基准各自给出明确提示，不再统一显示「备份包含未知路径」。</li><li>ZIP 与备份文件夹共用同一套校验与合并逻辑，恢复结果完全一致。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.5</strong><ul><li>备份导出支持完整与增量：以最近一次有效 manifest 为基准，只写新增原图与变化的元数据、收藏夹和删除记录；无变化时不会生成空备份。</li><li>导出进度会基于平滑后的实际处理速度显示预计剩余时间；Android 原始备份写完 manifest 后即成为有效基准，ZIP 失败也不影响。</li><li>PNG、JPG 和 WebP 可在本机进行基础裁切与 90° 旋转，支持覆盖原图或另存为；GIF、SVG 和 AVIF 保持原格式，不会被扁平化。</li></ul></section>
           <section className="changelog-entry"><strong>v0.5.5</strong><ul><li>修复 Android 输入关键词推荐打开无障碍设置时的回调报错：设置页不再依赖不稳定的 Activity 返回结果，回到心语后会读取实际授权状态并自动同步开关。</li><li>迷你表情库只保留搜索、常用和现有标签；自动推荐仍仅在命中你自己的标签时触发，不提供单独的推荐页。</li><li>超长图片文件名现在会自动换行；即使没有空格也不会横向溢出。</li></ul></section>

@@ -1,21 +1,21 @@
 import { strFromU8, unzipSync } from 'fflate';
-import { parseBackupManifest, readBackup, type Backup, type BackupManifest } from './backup';
+import { describeBackupLayoutProblem, isBackupImagePath, normalizeBackupLayout, parseBackupManifest, readBackup, type Backup, type BackupManifest } from './backup';
 import { sha256, type PrefilledImage } from './library';
 
 const MAX_IMPORT_ARCHIVE = 256 * 1024 * 1024;
+const MAX_IMPORT_EXPANDED = 512 * 1024 * 1024;
 const MAX_IMPORT_ENTRIES = 5000;
 
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 // A 心语 backup stores originals as `images/<sha256>` with no extension, so an
 // extension check alone would silently drop every image of a real backup.
-const BACKUP_IMAGE_PATH = /^images\/[a-f0-9]{64}$/;
 
 export function isSupportedImageName(name: string) {
   return IMAGE_NAME.test(name);
 }
 
 export function isImportableImageEntry(name: string) {
-  return isSupportedImageName(name) || BACKUP_IMAGE_PATH.test(name);
+  return isSupportedImageName(name) || isBackupImagePath(name);
 }
 
 export function isManifestEntry(name: string) {
@@ -74,25 +74,59 @@ async function buildItems(entries: ImportEntry[], manifest?: BackupManifest) {
 }
 
 async function readManifestEntry(files: Record<string, Uint8Array>): Promise<BackupManifest | undefined> {
-  const key = Object.keys(files).find((name) => isManifestEntry(name));
-  if (!key) return undefined;
-  try {
-    return parseBackupManifest(JSON.parse(strFromU8(files[key])));
-  } catch {
+  const names = Object.keys(files);
+  const layout = normalizeBackupLayout(names);
+  const manifestNames = names.filter(isManifestEntry);
+  if (!layout.manifestKey) {
+    if (manifestNames.length) throw new Error(describeBackupLayoutProblem(layout) || '备份路径不正确，未修改本地表情库');
     return undefined;
+  }
+  try {
+    const manifest = parseBackupManifest(JSON.parse(strFromU8(files[layout.manifestKey])));
+    if (!manifest) throw new Error('manifest 格式不正确，未修改本地表情库');
+    return manifest;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('manifest 格式')) throw error;
+    throw new Error('manifest 格式不正确，未修改本地表情库');
+  }
+}
+
+function isBackupLike(names: string[], layout: ReturnType<typeof normalizeBackupLayout>) {
+  // A root-level manifest is the native export shape even when an incremental
+  // backup has no images. A wrapper is backup-like once it contains an images
+  // directory/hash payload; ordinary manifest-aware photo folders remain
+  // importable for backwards compatibility.
+  return layout.manifestKey === 'manifest.json'
+    || layout.images.size > 0
+    || names.some((name) => /(?:^|\/)images(?:\/|$)/.test(name));
+}
+
+function validateFolderManifestLayout(names: string[], layout: ReturnType<typeof normalizeBackupLayout>) {
+  const manifestNames = names.filter(isManifestEntry);
+  if (!manifestNames.length) return;
+  if (layout.illegal.length || manifestNames.length !== 1 || isBackupLike(names, layout)) {
+    const problem = describeBackupLayoutProblem(layout);
+    if (problem) throw new Error(problem);
   }
 }
 
 /** A folder (or a multi-file selection) that may or may not carry a manifest. */
 export async function analyzeImportEntries(entries: ImportEntry[]): Promise<ImportAnalysis> {
-  const images = entries.filter((entry) => isImportableImageEntry(entry.name));
-  const manifestEntry = entries.find((entry) => isManifestEntry(entry.name));
+  const names = entries.map((entry) => entry.name);
+  const layout = normalizeBackupLayout(names);
+  validateFolderManifestLayout(names, layout);
+  const backupImageNames = new Set(layout.images.values());
+  const images = entries.filter((entry) => isSupportedImageName(entry.name) || backupImageNames.has(entry.name));
+  const manifestEntry = layout.manifestKey
+    ? entries.find((entry) => entry.name === layout.manifestKey)
+    : entries.find((entry) => isManifestEntry(entry.name));
   if (!images.length) return { kind: 'empty' };
   if (!manifestEntry) {
     const { items } = await buildItems(images);
     return { kind: 'images', items };
   }
   const manifest = await parseManifestBlob(manifestEntry.blob);
+  if (!manifest) throw new Error('manifest 格式不正确，未修改本地表情库');
   const { items, matched } = await buildItems(images, manifest);
   return manifest ? { kind: 'manifest', manifest, items, matched } : { kind: 'images', items };
 }
@@ -110,11 +144,13 @@ export async function analyzeImportZip(file: Blob): Promise<ImportAnalysis> {
   if (file.size > MAX_IMPORT_ARCHIVE + 8 * 1024 * 1024) throw new Error('导入包最多支持 256 MB');
   let files: Record<string, Uint8Array>;
   let seen = 0;
+  let expanded = 0;
   try {
     files = unzipSync(new Uint8Array(await file.arrayBuffer()), {
       filter: (entry) => {
         seen++;
-        if (entry.originalSize > 32 * 1024 * 1024 || seen > MAX_IMPORT_ENTRIES) throw new Error('压缩包内容超出限制');
+        expanded += entry.originalSize;
+        if (entry.originalSize > 32 * 1024 * 1024 || expanded > MAX_IMPORT_EXPANDED || seen > MAX_IMPORT_ENTRIES) throw new Error('压缩包内容超出限制');
         return isImportableImageEntry(entry.name) || isManifestEntry(entry.name);
       },
     });

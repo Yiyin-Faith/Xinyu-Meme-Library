@@ -109,6 +109,66 @@ describe('folder / ZIP import analysis', () => {
     expect(await sha256(analysis.items[0].blob)).toBe(id);
   });
 
+  it('recognises a renamed wrapper folder with extensionless backup originals', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = await manifestFor(id, blob.size);
+    const analysis = await analyzeImportEntries([
+      { name: `my-renamed-backup/manifest.json`, blob: new Blob([JSON.stringify(manifest)]) },
+      { name: `my-renamed-backup/images/${id}`, blob },
+    ]);
+
+    expect(analysis.kind).toBe('manifest');
+    if (analysis.kind !== 'manifest') return;
+    expect(analysis.matched).toBe(1);
+    expect(await sha256(analysis.items[0].blob)).toBe(id);
+  });
+
+  it('recognises the exported xinyu-backup-xxx wrapper and extensionless hash', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = await manifestFor(id, blob.size);
+    const analysis = await analyzeImportEntries([
+      { name: 'xinyu-backup-xxx/manifest.json', blob: new Blob([JSON.stringify(manifest)]) },
+      { name: `xinyu-backup-xxx/images/${id}`, blob },
+    ]);
+
+    expect(analysis.kind).toBe('manifest');
+    if (analysis.kind !== 'manifest') return;
+    expect(analysis.matched).toBe(1);
+  });
+
+  it('rejects illegal, unknown and duplicate manifest entries for backup-like folders', async () => {
+    const blob = pngBlob();
+    const id = await sha256(blob);
+    const manifest = new Blob([JSON.stringify(await manifestFor(id, blob.size))]);
+    const image = { name: `images/${id}`, blob };
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest }, image, { name: '../evil.png', blob },
+    ])).rejects.toThrow('非法路径');
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest }, image, { name: 'images/not-a-hash.txt', blob },
+    ])).rejects.toThrow('未知文件');
+    await expect(analyzeImportEntries([
+      { name: 'manifest.json', blob: manifest }, { name: 'copy/manifest.json', blob: manifest }, image,
+    ])).rejects.toThrow();
+  });
+
+  it('does not downgrade malformed ZIP manifests or invalid manifest roots to plain images', async () => {
+    const malformed = new Blob([zipSync({
+      'manifest.json': strToU8('{broken'),
+      [`images/${'d'.repeat(64)}`]: PNG_BYTES,
+    })], { type: 'application/zip' });
+    await expect(analyzeImportZip(malformed)).rejects.toThrow('manifest 格式不正确');
+
+    const invalidRoot = new Blob([zipSync({
+      'one/manifest.json': strToU8('{broken'),
+      'two/manifest.json': strToU8('{broken'),
+      [`one/images/${'e'.repeat(64)}`]: PNG_BYTES,
+    })], { type: 'application/zip' });
+    await expect(analyzeImportZip(invalidRoot)).rejects.toThrow();
+  });
+
   it('helpers recognise image names and basenames', () => {
     expect(isSupportedImageName('a.PNG')).toBe(true);
     expect(isSupportedImageName('a.jpeg')).toBe(true);

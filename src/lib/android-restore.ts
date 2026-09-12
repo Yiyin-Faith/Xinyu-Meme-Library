@@ -1,8 +1,8 @@
 import { Capacitor, registerPlugin, type Plugin } from '@capacitor/core';
-import { assembleBackup, describeBackupLayoutProblem, normalizeBackupLayout, type Backup, type BackupImageSource } from './backup';
+import { assembleBackup, describeBackupLayoutProblem, normalizeBackupLayout, validateBackupEntryLimits, type Backup, type BackupImageSource } from './backup';
 
 type NativeFolderEntry = { path: string; size: number };
-type NativeBackupFolder = { cancelled: boolean; treeUri?: string; location?: string; entries?: NativeFolderEntry[] };
+type NativeBackupFolder = { cancelled: boolean; treeUri?: string; location?: string; entries?: NativeFolderEntry[]; truncated?: boolean };
 type NativeReadHandle = { readerId: string; size: number };
 type NativeChunk = { data: string; done: boolean };
 
@@ -54,6 +54,7 @@ export async function pickAndroidBackupFolder(): Promise<AndroidBackupFolder | u
   const picked = await NativeBackupRestore.chooseBackupFolder();
   if (picked.cancelled) return undefined;
   if (!picked.treeUri) throw new Error('未能读取所选备份文件夹');
+  if (picked.truncated) throw new Error('备份文件夹内容超出安全限制，未修改本地表情库');
   return { treeUri: picked.treeUri, location: picked.location || '所选备份文件夹', entries: picked.entries ?? [] };
 }
 
@@ -65,6 +66,7 @@ export async function pickAndroidBackupFolder(): Promise<AndroidBackupFolder | u
  * the user picked a ZIP or a folder.
  */
 export async function readAndroidBackupFolder(folder: AndroidBackupFolder, onProgress?: (completed: number, total: number) => void, checkDimensions = true): Promise<Backup> {
+  validateBackupEntryLimits(folder.entries);
   const layout = normalizeBackupLayout(folder.entries.map((entry) => entry.path));
   const problem = describeBackupLayoutProblem(layout);
   if (problem) throw new Error(problem);

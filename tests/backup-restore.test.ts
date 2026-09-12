@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { assembleBackup, commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, normalizeBackupLayout, readBackup, type ReadyBackupExportPlan } from '../src/lib/backup';
+import { assembleBackup, commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, MAX_ENTRIES, MAX_SINGLE_FILE, mergeBackup, normalizeBackupLayout, readBackup, type ReadyBackupExportPlan } from '../src/lib/backup';
 import { LibraryDB, sha256 } from '../src/lib/library';
 import type { Meme } from '../src/types';
 
@@ -195,6 +195,32 @@ describe('backup restore compatibility', () => {
     expect(progress.length).toBeGreaterThan(0);
   });
 
+  it('7b · restores a SAF folder when the selected tree contains a wrapper', async () => {
+    const source = database('folder-wrapper-source');
+    const target = database('folder-wrapper-target');
+    const item = await meme('SAF 外包装');
+    await source.memes.add(item);
+    const { files } = await payload(source);
+    const wrapper = 'xinyu-backup-xxx/';
+    useFolder(Object.fromEntries(Object.entries(files).map(([path, bytes]) => [`${wrapper}${path}`, bytes])));
+
+    const { result } = await restoreFolder(target);
+    expect(result.added).toBe(1);
+    expect(await target.memes.get(item.id)).toMatchObject({ title: 'SAF 外包装' });
+  });
+
+  it('7c · rejects SAF size and count limits before opening manifest or image streams', async () => {
+    const readCalls = native.openFileForRead;
+    await expect(readAndroidBackupFolder({ treeUri: 'content://tree', location: '限制', entries: [
+      { path: 'manifest.json', size: MAX_SINGLE_FILE + 1 },
+    ] }, undefined, false)).rejects.toThrow('超大');
+    await expect(readAndroidBackupFolder({ treeUri: 'content://tree', location: '限制', entries: [
+      ...Array.from({ length: 17 }, (_, index) => ({ path: `images/${index}`, size: MAX_SINGLE_FILE })),
+    ] }, undefined, false)).rejects.toThrow('总大小');
+    await expect(readAndroidBackupFolder({ treeUri: 'content://tree', location: '限制', entries: Array.from({ length: MAX_ENTRIES + 1 }, (_, index) => ({ path: `f${index}`, size: 0 })) }, undefined, false)).rejects.toThrow('文件数');
+    expect(readCalls).not.toHaveBeenCalled();
+  });
+
   it('8 · restores a complete folder and applies tombstone deletions', async () => {
     const source = database('folder-full');
     const target = database('folder-full-target');
@@ -297,6 +323,22 @@ describe('backup layout whitelist', () => {
     const layout = normalizeBackupLayout(['outer/inner/manifest.json', 'outer/other/manifest.json']);
     expect(layout.manifestKey).toBeUndefined();
     expect(layout.unknown).toContain('outer/inner/manifest.json');
+  });
+
+  it('does not mix wrapper manifests with root-level image payloads', () => {
+    const id = 'b'.repeat(64);
+    const layout = normalizeBackupLayout([`xinyu-backup-xxx/manifest.json`, `images/${id}`]);
+    expect(layout.manifestKey).toBe(`xinyu-backup-xxx/manifest.json`);
+    expect([...layout.images]).toHaveLength(0);
+    expect(layout.unknown).toContain(`images/${id}`);
+  });
+
+  it('does not mix root manifests with wrapper image payloads', () => {
+    const id = 'c'.repeat(64);
+    const layout = normalizeBackupLayout(['manifest.json', `xinyu-backup-xxx/images/${id}`]);
+    expect(layout.manifestKey).toBe('manifest.json');
+    expect([...layout.images]).toHaveLength(0);
+    expect(layout.unknown).toContain(`xinyu-backup-xxx/images/${id}`);
   });
 });
 
