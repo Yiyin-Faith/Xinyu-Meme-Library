@@ -18,6 +18,12 @@ export interface Meme {
 }
 export interface Collection { id: string; name: string; color: string; updatedAt: number }
 export interface Tombstone { id: string; deletedAt: number }
+/**
+ * A private local copy of the last successfully written backup manifest.
+ * It is only a comparison baseline; user data continues to live in the
+ * exported manifest and image files.
+ */
+export interface BackupBaseline { id: 'latest'; manifest: unknown; savedAt: number }
 export interface Settings { id: 'preferences'; reduceMotion: boolean; dense: boolean; onlineSupplement: boolean; floatingWindow: boolean }
 export interface OnlineMeme { id: string; title: string; url: string; tags: string[]; source: string; width: number; height: number }
 export type View = 'all' | 'favorites' | 'recent' | 'online' | 'tags' | 'sync' | 'settings' | `collection:${string}`;

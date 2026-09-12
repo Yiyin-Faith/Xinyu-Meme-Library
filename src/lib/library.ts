@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Collection, Meme, Settings, Tombstone } from '../types';
+import type { BackupBaseline, Collection, Meme, Settings, Tombstone } from '../types';
 
 const legacyDefaultCollectionIds = ['daily', 'cute', 'work'];
 
@@ -8,6 +8,7 @@ export class LibraryDB extends Dexie {
   collections!: EntityTable<Collection, 'id'>;
   tombstones!: EntityTable<Tombstone, 'id'>;
   settings!: EntityTable<Settings, 'id'>;
+  backupBaselines!: EntityTable<BackupBaseline, 'id'>;
   constructor(name = 'puff-library') {
     super(name);
     this.version(1).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id', tombstones: 'id', settings: 'id' });
@@ -25,6 +26,9 @@ export class LibraryDB extends Dexie {
         if (typeof settings.floatingWindow !== 'boolean') settings.floatingWindow = false;
       });
     });
+    // Keep the last valid backup manifest separate from user preferences.
+    // This is deliberately metadata-only and does not duplicate original images.
+    this.version(5).stores({ memes: 'id, title, collectionId, *tags, createdAt, lastUsedAt', collections: 'id, updatedAt', tombstones: 'id', settings: 'id', backupBaselines: 'id' });
   }
 }
 export const db = new LibraryDB();
@@ -126,6 +130,51 @@ export async function importImages(files: File[], options: ImportOptions | strin
 }
 export async function updateMeme(id: string, changes: Partial<Pick<Meme, 'title' | 'tags' | 'note' | 'collectionId' | 'favorite'>>) {
   await db.memes.update(id, { ...changes, updatedAt: Date.now() });
+}
+
+export type ImageEditSaveMode = 'replace' | 'copy';
+export type ImageEditSaveResult = 'replaced' | 'copied' | 'unchanged' | 'already-exists';
+
+/**
+ * Writes a canvas-rendered image back into the existing content-addressed
+ * library. Replacing creates a tombstone for the old hash so an incremental
+ * backup can faithfully remove it on restore; saving a copy leaves the source
+ * record untouched.
+ */
+export async function saveEditedMeme(id: string, editedImage: Blob, mode: ImageEditSaveMode): Promise<ImageEditSaveResult> {
+  const original = await db.memes.get(id);
+  if (!original) throw new Error('原图已不存在，请关闭后重新打开编辑页');
+  const edited = await prepareImage(
+    editedImage,
+    mode === 'copy' ? `${original.title}（编辑）` : original.title,
+    original.collectionId,
+    original.source,
+  );
+  if (edited.id === original.id) return 'unchanged';
+
+  const now = Date.now();
+  const next: Meme = {
+    ...edited,
+    title: mode === 'copy' ? edited.title : original.title,
+    tags: [...original.tags],
+    note: original.note,
+    collectionId: original.collectionId,
+    favorite: original.favorite,
+    createdAt: mode === 'copy' ? now : original.createdAt,
+    updatedAt: now,
+    lastUsedAt: mode === 'copy' ? 0 : original.lastUsedAt,
+    useCount: mode === 'copy' ? 0 : original.useCount,
+  };
+
+  return db.transaction('rw', db.memes, db.tombstones, async () => {
+    if (await db.memes.get(next.id)) return 'already-exists';
+    await db.memes.put(next);
+    await db.tombstones.delete(next.id);
+    if (mode === 'copy') return 'copied';
+    await db.tombstones.put({ id: original.id, deletedAt: now });
+    await db.memes.delete(original.id);
+    return 'replaced';
+  });
 }
 export async function markUsed(id: string) {
   await db.memes.where('id').equals(id).modify((m) => { m.lastUsedAt = Date.now(); m.useCount++; });

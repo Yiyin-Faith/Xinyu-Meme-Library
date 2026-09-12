@@ -16,7 +16,7 @@ describe('database migration', () => {
     const upgraded = new LibraryDB(name); databases.push(upgraded);
     expect((await upgraded.collections.orderBy('updatedAt').toArray()).map((c) => c.id)).toEqual(['earlier', 'personal']);
     expect((await upgraded.memes.get('old-image'))?.title).toBe('我的旧表情');
-    expect(upgraded.verno).toBe(4);
+    expect(upgraded.verno).toBe(5);
   });
 
   it('adds a disabled floating-window preference to an existing library', async () => {

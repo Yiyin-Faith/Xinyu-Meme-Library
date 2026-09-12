@@ -1,5 +1,5 @@
 import { registerPlugin, type Plugin, type PluginListenerHandle } from '@capacitor/core';
-import { backupManifestText, createBackupSnapshot, getBackupImage } from './backup';
+import { backupManifestText, commitBackupExportPlan, getBackupImage, type ReadyBackupExportPlan } from './backup';
 
 type NativeBackupDirectory = {
   cancelled: boolean;
@@ -31,6 +31,7 @@ export type AndroidBackupProgress =
 export type AndroidBackupResult =
   | { kind: 'cancelled' }
   | { kind: 'complete'; rawLocation: string; zipLocation: string; zipName: string }
+  | { kind: 'raw'; rawLocation: string }
   | { kind: 'raw-only'; rawLocation: string; compressionError: string };
 
 export class AndroidBackupCopyError extends Error {
@@ -92,10 +93,11 @@ function asErrorMessage(error: unknown) {
 
 /**
  * Android-only export path. It never builds a whole-library ArrayBuffer, ZIP,
- * or Base64 string in WebView memory: each Blob is streamed to a user-selected
- * persistent folder, then the native side streams that folder into a ZIP.
+ * or Base64 string in WebView memory: each required Blob is streamed to a
+ * user-selected persistent folder, then the native side optionally streams
+ * that folder into a ZIP.
  */
-export async function exportAndroidBackup(onProgress: (progress: AndroidBackupProgress) => void): Promise<AndroidBackupResult> {
+export async function exportAndroidBackup(plan: ReadyBackupExportPlan, onProgress: (progress: AndroidBackupProgress) => void, packZip = true): Promise<AndroidBackupResult> {
   const stamp = localDateStamp();
   const folderName = `xinyu-backup-${stamp}`;
   const zipFileName = `${folderName}.puff.zip`;
@@ -104,8 +106,9 @@ export async function exportAndroidBackup(onProgress: (progress: AndroidBackupPr
   if (destination.cancelled) return { kind: 'cancelled' };
   if (!destination.treeUri || !destination.folderName || !destination.location) throw new Error('未能创建外部备份目录');
 
-  const snapshot = await createBackupSnapshot();
-  const total = snapshot.manifest.memes.length;
+  const snapshot = plan.snapshot;
+  const images = snapshot.manifest.memes.filter((meme) => meme.imageIncluded !== false);
+  const total = images.length;
   let completed = 0;
   let bytesCompleted = 0;
   let lastProgressAt = 0;
@@ -118,7 +121,7 @@ export async function exportAndroidBackup(onProgress: (progress: AndroidBackupPr
 
   try {
     updateCopyProgress(true);
-    for (const meme of snapshot.manifest.memes) {
+    for (const meme of images) {
       const blob = await getBackupImage(meme.id);
       await writeBlob(destination.treeUri, destination.folderName, `images/${meme.id}`, meme.mime, blob, (bytes) => {
         bytesCompleted += bytes;
@@ -135,11 +138,15 @@ export async function exportAndroidBackup(onProgress: (progress: AndroidBackupPr
       new Blob([backupManifestText(snapshot)], { type: 'application/json' }),
       () => undefined,
     );
+    // A manifest plus every image it declares is a valid backup even when the
+    // later optional ZIP step fails. Persist the comparison base right here.
+    await commitBackupExportPlan(plan);
   } catch (error) {
     throw new AndroidBackupCopyError(`原始备份未完成：${asErrorMessage(error)}`, destination.location);
   }
 
   onProgress({ phase: 'raw-complete', completed, total, bytesCompleted, totalBytes: snapshot.totalBytes, location: destination.location });
+  if (!packZip) return { kind: 'raw', rawLocation: destination.location };
   let listener: PluginListenerHandle | undefined;
   try {
     listener = await NativeBackupExport.addListener('compressionProgress', (event: { completed?: number; total?: number; bytesCompleted?: number; totalBytes?: number }) => {
