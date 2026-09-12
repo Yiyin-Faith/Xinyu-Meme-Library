@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  Archive, ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Crop, RotateCcw, RotateCw,
+  Archive, ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Crop, FlipHorizontal, RotateCcw, RotateCw,
   Download, FileImage, FolderPlus, Grid2X2, Heart, History, ImagePlus, Info, Keyboard, Layers3, Menu,
   MessageCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, Settings, Share2, Sparkles, Tag, Trash2, Upload, UserRound, X, Zap,
 } from 'lucide-react';
@@ -11,7 +11,7 @@ import Modal from './components/Modal';
 import { db, defaultSettings, deleteMemes, formatBytes, getOrCreateCollection, importImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, saveEditedMeme, updateMeme } from './lib/library';
 import { commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, readBackup, type BackupMode, type ExportProgress } from './lib/backup';
 import { AndroidBackupCopyError, exportAndroidBackup, type AndroidBackupProgress } from './lib/android-backup';
-import { canEditImage, clampCrop, editedDimensions, fullCrop, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
+import { canEditImage, clampCrop, editedDimensions, fullCrop, isNoopEdit, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
 import { fetchOnlineImage, searchOnline } from './lib/online';
 import { deliverAndroidFloatingMiniSnapshot, getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, syncAndroidFloatingMiniCatalog, useImage } from './lib/platform';
 import { communityData, type CommunityPost, type MockProfile, type UploadQuota } from './lib/community';
@@ -407,29 +407,33 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
   const [collectionId, setCollectionId] = useState(meme.collectionId);
   const [crop, setCrop] = useState<CropRect>(() => fullCrop(meme.width, meme.height));
   const [rotation, setRotation] = useState(0);
+  const [flip, setFlip] = useState(false);
   const [editPreview, setEditPreview] = useState('');
   const [editing, setEditing] = useState(false);
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
   const url = useBlobUrl(meme.blob);
-  const editable = canEditImage(meme.mime);
+  const editable = canEditImage(meme.mime) && Boolean(meme.blob);
   const output = editedDimensions(crop, rotation);
+  const unchanged = isNoopEdit(crop, rotation, flip, meme.width, meme.height);
   const changes = { title: title.trim() || '未命名表情', note, tags: normalizeTags(tags.split(/[，,\s]+/)), collectionId };
 
   useEffect(() => {
     if (!editable) return;
     let active = true;
     let previewUrl = '';
-    void renderEditedPreview(meme.blob, crop, rotation).then((image) => {
+    void renderEditedPreview(meme.blob, crop, rotation, flip).then((image) => {
       previewUrl = URL.createObjectURL(image);
       if (active) setEditPreview(previewUrl);
       else URL.revokeObjectURL(previewUrl);
     }).catch(() => undefined);
     return () => { active = false; if (previewUrl) URL.revokeObjectURL(previewUrl); };
-  }, [editable, meme.blob, crop.x, crop.y, crop.width, crop.height, rotation]);
+  }, [editable, meme.blob, crop.x, crop.y, crop.width, crop.height, rotation, flip]);
 
   const changeCrop = (field: keyof CropRect, value: string) => {
     const number = Number(value);
     setCrop((current) => clampCrop({ ...current, [field]: Number.isFinite(number) ? number : current[field] }, meme.width, meme.height));
   };
+  const resetEdits = () => { setCrop(fullCrop(meme.width, meme.height)); setRotation(0); setFlip(false); };
   const save = async () => {
     try {
       await updateMeme(meme.id, changes);
@@ -441,13 +445,13 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
     if (!editable) return;
     setEditing(true);
     try {
-      if (crop.x === 0 && crop.y === 0 && crop.width === meme.width && crop.height === meme.height && rotation % 360 === 0) {
+      if (unchanged) {
         await updateMeme(meme.id, changes);
         onNotify('图片没有发生变化，已保存名称、标签和分组');
         onClose();
         return;
       }
-      const image = await renderEditedImage(meme.blob, crop, rotation);
+      const image = await renderEditedImage(meme.blob, crop, rotation, flip);
       // The image save reads the record again, so its metadata stays aligned
       // with the fields the user has just edited in this modal.
       await updateMeme(meme.id, changes);
@@ -457,10 +461,14 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
       onNotify(result === 'replaced' ? '已覆盖原图并保留删除记录' : '已另存为一张新图片');
       onClose();
     } catch (error) { onNotify(error instanceof Error ? error.message : '保存编辑结果失败'); }
-    finally { setEditing(false); }
+    finally { setEditing(false); setReplaceConfirmOpen(false); }
   };
+  // Overwriting keeps the same title and tags but destroys the original pixels,
+  // so it always asks once before writing.
+  const requestReplace = () => { if (!editable || editing) return; if (unchanged) { void saveEdited('replace'); return; } setReplaceConfirmOpen(true); };
 
-  return <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" onClose={editing ? () => undefined : onClose}>
+  return <>
+  <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" onClose={editing ? () => undefined : onClose}>
     <div className="edit-layout">
       <div className="edit-preview edit-preview-result"><img src={editPreview || url} alt={meme.title} /></div>
       <div className="edit-fields">
@@ -468,12 +476,24 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
         <label>标签<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="例如：开心 反应 朋友" /></label>
         <label>收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label>
-        {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button></div><div className="crop-fields"><label>X<input inputMode="numeric" type="number" min="0" max={meme.width - 1} value={crop.x} onChange={(event) => changeCrop('x', event.target.value)} /></label><label>Y<input inputMode="numeric" type="number" min="0" max={meme.height - 1} value={crop.y} onChange={(event) => changeCrop('y', event.target.value)} /></label><label>宽<input inputMode="numeric" type="number" min="1" max={meme.width} value={crop.width} onChange={(event) => changeCrop('width', event.target.value)} /></label><label>高<input inputMode="numeric" type="number" min="1" max={meme.height} value={crop.height} onChange={(event) => changeCrop('height', event.target.value)} /></label></div><button type="button" className="text-button" onClick={() => { setCrop(fullCrop(meme.width, meme.height)); setRotation(0); }}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
+        {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button><button type="button" className={`glass-button ${flip ? 'selected-mode' : ''}`} aria-pressed={flip} onClick={() => setFlip((value) => !value)}><FlipHorizontal size={14} /> 水平翻转</button></div><div className="crop-fields"><label>X<input inputMode="numeric" type="number" min="0" max={meme.width - 1} value={crop.x} onChange={(event) => changeCrop('x', event.target.value)} /></label><label>Y<input inputMode="numeric" type="number" min="0" max={meme.height - 1} value={crop.y} onChange={(event) => changeCrop('y', event.target.value)} /></label><label>宽<input inputMode="numeric" type="number" min="1" max={meme.width} value={crop.width} onChange={(event) => changeCrop('width', event.target.value)} /></label><label>高<input inputMode="numeric" type="number" min="1" max={meme.height} value={crop.height} onChange={(event) => changeCrop('height', event.target.value)} /></label></div><button type="button" className="text-button" onClick={resetEdits}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
         <div className="edit-actions"><span /><button className="glass-button" disabled={editing} onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" disabled={editing} onClick={() => { void save(); }}><Check size={16} /> 保存信息</button></div>
-        {editable && <div className="image-save-actions"><button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={() => { void saveEdited('replace'); }}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
+        {editable && <div className="image-save-actions"><button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={requestReplace}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
+        {editable && <p className="image-save-hint">“覆盖原图”会替换这张图片的原始像素，并与图库中的其他设备同步为删除旧图；覆盖前会再确认一次。</p>}
       </div>
     </div>
-  </Modal>;
+  </Modal>
+  {replaceConfirmOpen && <Modal title="覆盖原图？" subtitle="这会用编辑后的图片替换原始图片，删除记录会随备份同步。" onClose={() => setReplaceConfirmOpen(false)}>
+    <div className="replace-confirm">
+      <p>覆盖后原图无法从本机找回；如果你还想保留原图，请选择“另存为”。</p>
+      <div className="replace-confirm-actions">
+        <button type="button" className="glass-button" onClick={() => setReplaceConfirmOpen(false)}>取消</button>
+        <button type="button" className="glass-button" onClick={() => { setReplaceConfirmOpen(false); void saveEdited('copy'); }}>改为另存为</button>
+        <button type="button" className="danger-button" onClick={() => { void saveEdited('replace'); }}>确认覆盖原图</button>
+      </div>
+    </div>
+  </Modal>}
+  </>;
 }
 
 function ImportModal({ collections, initialFiles, onClose, onNotify }: { collections: Collection[]; initialFiles: File[]; onClose: () => void; onNotify: (message: string) => void }) {

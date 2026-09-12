@@ -45,8 +45,14 @@ async function decodeEditableImage(blob: Blob) {
   }
 }
 
+/** True when the edit produces exactly the original pixels, so nothing must be re-encoded. */
+export function isNoopEdit(crop: CropRect, rotation: number, flipHorizontal: boolean, sourceWidth: number, sourceHeight: number) {
+  return !flipHorizontal && normalizeRotation(rotation) === 0
+    && crop.x === 0 && crop.y === 0 && crop.width === sourceWidth && crop.height === sourceHeight;
+}
+
 /** Renders one selected static image only; it never reads the full gallery. */
-async function render(blob: Blob, crop: CropRect, rotation: number, maxPreviewSide?: number): Promise<Blob> {
+async function render(blob: Blob, crop: CropRect, rotation: number, flipHorizontal = false, maxPreviewSide?: number): Promise<Blob> {
   if (!canEditImage(blob.type)) throw new Error('仅 PNG、JPG 和 WebP 支持裁切与旋转，避免破坏 GIF 动图、SVG 和 AVIF');
   const image = await decodeEditableImage(blob);
   const safeCrop = clampCrop(crop, image.naturalWidth, image.naturalHeight);
@@ -60,16 +66,19 @@ async function render(blob: Blob, crop: CropRect, rotation: number, maxPreviewSi
   if (!context) throw new Error('当前设备不支持图片编辑');
   context.translate(canvas.width / 2, canvas.height / 2);
   context.rotate((safeRotation * Math.PI) / 180);
+  // Mirroring happens after rotation so "flip" always means the visual
+  // left/right of what the user currently sees in the preview.
+  if (flipHorizontal) context.scale(-1, 1);
   context.drawImage(image, safeCrop.x, safeCrop.y, safeCrop.width, safeCrop.height, -safeCrop.width * scale / 2, -safeCrop.height * scale / 2, safeCrop.width * scale, safeCrop.height * scale);
   return new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => result ? resolve(result) : reject(new Error('生成编辑后的图片失败')), 'image/png'));
 }
 
 /** Produces the original-resolution PNG used by overwrite/save-as. */
-export async function renderEditedImage(blob: Blob, crop: CropRect, rotation: number): Promise<Blob> {
-  return render(blob, crop, rotation);
+export async function renderEditedImage(blob: Blob, crop: CropRect, rotation: number, flipHorizontal = false): Promise<Blob> {
+  return render(blob, crop, rotation, flipHorizontal);
 }
 
 /** Keeps interactive preview work bounded even for the largest supported image. */
-export async function renderEditedPreview(blob: Blob, crop: CropRect, rotation: number): Promise<Blob> {
-  return render(blob, crop, rotation, 960);
+export async function renderEditedPreview(blob: Blob, crop: CropRect, rotation: number, flipHorizontal = false): Promise<Blob> {
+  return render(blob, crop, rotation, flipHorizontal, 960);
 }

@@ -298,6 +298,10 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 .text-button:hover { color: #467556; text-decoration: underline; }
 .image-edit-unsupported { padding: 9px 10px; border-radius: 10px; color: #937a66; background: rgba(255, 243, 224, .75); font-size: 11px; line-height: 1.5; }
 .image-save-actions { justify-content: flex-end; padding-top: 1px; }
+.image-save-hint { margin: 0; color: #93a49a; font-size: 10px; line-height: 1.45; }
+.replace-confirm { display: grid; gap: 14px; }
+.replace-confirm p { margin: 0; color: #7c8d83; font-size: 12px; line-height: 1.6; }
+.replace-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .backup-export-content { min-width: 0; }
 .backup-type-choice { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
 .backup-type-choice label { display: inline-flex !important; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid rgba(93, 137, 104, .22); border-radius: 8px; color: #718a7a; background: rgba(255,255,255,.55); font-size: 11px !important; font-weight: 700; cursor: pointer; }

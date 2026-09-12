@@ -159,9 +159,13 @@ export async function commitBackupExportPlan(plan: ReadyBackupExportPlan, databa
   await database.backupBaselines.put({ id: 'latest', manifest: plan.nextBaseline.manifest, savedAt: Date.now() });
 }
 
+function isUsableImage(blob: unknown): blob is Blob {
+  return blob instanceof Blob && blob.size > 0;
+}
+
 export async function getBackupImage(id: string, database: LibraryDB = db): Promise<Blob> {
   const meme = await database.memes.get(id);
-  if (!meme) throw new Error('导出期间找不到一张图片，请重新开始备份');
+  if (!meme || !isUsableImage(meme.blob)) throw new Error('导出期间找不到一张图片，请重新开始备份');
   return meme.blob;
 }
 
@@ -265,8 +269,19 @@ export async function mergeBackup(backup: Backup, applyDeletions: boolean, resto
           ? `增量备份缺少收藏夹“${incoming.collectionId}”，请先恢复它所依赖的完整备份`
           : `收藏夹缺失：${incoming.title}`);
       }
-      if (!local && !incoming.blob) throw new Error(`增量备份缺少“${incoming.title}”的原图，请先恢复它所依赖的完整备份`);
-      const candidate = asMeme(incoming, incoming.blob ?? local!.blob);
+      // A record may only be written when real image bytes exist for it. A
+      // metadata-only incremental entry reuses the local blob, but never a
+      // missing or zero-length one, otherwise the restored card would render
+      // an unreadable image.
+      const source = isUsableImage(incoming.blob) ? incoming.blob
+        : isUsableImage(local?.blob) ? local.blob
+          : undefined;
+      if (!source) {
+        throw new Error(local
+          ? `本机“${incoming.title}”的原图已损坏，增量备份无法修复它，请先恢复包含原图的完整备份`
+          : `增量备份缺少“${incoming.title}”的原图，请先恢复它所依赖的完整备份`);
+      }
+      const candidate = asMeme(incoming, source);
       if (!local) { await database.memes.put(candidate); added++; }
       else if (incoming.updatedAt > local.updatedAt) {
         await database.memes.put({ ...candidate, lastUsedAt: Math.max(local.lastUsedAt, incoming.lastUsedAt), useCount: Math.max(local.useCount, incoming.useCount) });
