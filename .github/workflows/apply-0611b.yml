@@ -1,0 +1,72 @@
+name: Apply 0.6.11 mini cache fix v2
+
+on:
+  push:
+    branches: [ci/apply-floating-cache-0611b]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/floating-cache-0611
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Reuse patch script and correct test yield
+        run: |
+          git fetch origin ci/apply-floating-cache-0611:refs/remotes/origin/ci/apply-floating-cache-0611
+          git show origin/ci/apply-floating-cache-0611:.github/workflows/apply-0611.yml > /tmp/apply-0611.yml
+          ruby -ryaml -e 'doc=YAML.load_file("/tmp/apply-0611.yml"); step=doc.fetch("jobs").fetch("apply").fetch("steps").find { |s| s["name"] == "Apply mini cache recovery patch" }; File.write("/tmp/apply-0611.py", step.fetch("run"))'
+          python /tmp/apply-0611.py
+          sed -i 's/window\.setTimeout(resolve, 0)/setTimeout(resolve, 0)/' src/lib/floating-mini.ts
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Web tests
+        run: npm test
+
+      - name: Production web build
+        run: npm run build
+
+      - name: Android unit tests
+        run: |
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            android/app/src/main/java/com/puff/meme/FloatingMiniLibraryCache.java \
+            android/app/src/main/java/com/puff/meme/FloatingWindowService.java \
+            android/app/src/main/java/com/puff/meme/FloatingWindowPlugin.java \
+            android/app/build.gradle \
+            src/lib/platform.ts \
+            src/lib/floating-mini.ts \
+            src/App.tsx \
+            tests/floating-mini.test.ts \
+            package.json package-lock.json
+          git commit -m "fix(android): warm floating mini thumbnail cache"
+          git push origin HEAD:fix/floating-cache-0611
