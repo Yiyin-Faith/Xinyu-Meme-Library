@@ -88,7 +88,7 @@ function App() {
         }
         if (current.enabled) return;
         const started = await setAndroidFloatingWindow(true);
-        if (!started.enabled) disablePreference('悬浮窗未能显示，请检查系统后台限制');
+        if (!started.enabled) notify('悬浮窗暂时未恢复，可稍后重试或检查系统后台限制');
       } catch {
         notify('悬浮窗恢复暂时失败，可稍后重试或检查系统后台限制');
       }
@@ -101,12 +101,14 @@ function App() {
 
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
   useEffect(() => {
-    if (!ready || !isAndroid) return;
+    // Do not clear a tag index restored by the native cache while Dexie is
+    // still producing its temporary empty startup value.
+    if (!ready || !isAndroid || !memesLoaded) return;
     // Only current user-owned tag names cross the native bridge. Android can
     // rebuild them from the existing private mini-library metadata cache after
     // process recreation; external input text is never persisted there.
     void setAndroidAccessibilityRecommendationTags(tags.map(([tag]) => tag)).catch(() => undefined);
-  }, [ready, tags]);
+  }, [ready, memesLoaded, tags]);
   useEffect(() => {
     // Do not overwrite Android's last usable catalog with the temporary []
     // produced while Dexie is still opening. The bridge and the persisted
@@ -774,6 +776,8 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     const label = `${backupMode === 'full' ? '完整' : '增量'}备份导出`;
     const taskId = startTask({ id: `backup-${Date.now()}`, kind: 'backup', title: label, label: '准备导出…', detail: '', badge: '准备中', percentage: 0, indeterminate: true });
     setActiveTaskId(taskId);
+    // Every status update is mirrored into the shared task so the dock keeps
+    // showing progress after this modal is closed.
     const push = (status: BackupStatus) => {
       const view = describeBackupStatus(status);
       setExportPhase(status.phase);
@@ -841,6 +845,11 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     }
     finally { setBusy(false); }
   };
+  /**
+   * Android restore straight from an uncompressed backup folder. The picker
+   * hands back a `content://` tree, the native side streams each file, and the
+   * ZIP path's whitelist and checks are reused unchanged.
+   */
   const restoreFolder = async () => {
     setBusy(true);
     const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从备份文件夹恢复', label: '请选择备份文件夹…', detail: '', badge: '等待选择', percentage: 0, indeterminate: true });
