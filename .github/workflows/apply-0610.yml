@@ -69,6 +69,7 @@ jobs:
       - name: Run tests
         run: |
           npm test
+          npx cap sync android
           cd android
           chmod +x gradlew
           ./gradlew testDebugUnitTest
