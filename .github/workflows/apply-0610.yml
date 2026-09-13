@@ -1,0 +1,84 @@
+name: Apply 0.6.10 recovery fix
+
+on:
+  push:
+    branches: [ci/apply-floating-recovery-0610]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/floating-recovery-0610
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Apply narrow recovery patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'android/app/src/main/java/com/puff/meme/FloatingWindowService.java',
+              '''        } catch (Exception ignored) {\n            hideMiniLibrary(false);\n            hideBubble();\n            setEnabledPreference(this, false);\n            stopSelf();\n            return START_NOT_STICKY;\n        }''',
+              '''        } catch (Exception ignored) {\n            hideMiniLibrary(false);\n            hideBubble();\n            // A transient WindowManager / foreground-service startup failure must\n            // not erase the user's persisted choice. Stop only this failed\n            // instance; AccessibilityService reconnect or the next foreground\n            // sync can retry while the enabled preference remains true.\n            stopSelf();\n            return START_NOT_STICKY;\n        }'''
+          )
+
+          replace_once('package.json', '"version": "0.6.9"', '"version": "0.6.10"')
+
+          p = Path('package-lock.json')
+          text = p.read_text(encoding='utf-8')
+          if text.count('"version": "0.6.9"') < 2:
+              raise SystemExit('package-lock version markers missing')
+          text = text.replace('"version": "0.6.9"', '"version": "0.6.10"', 2)
+          p.write_text(text, encoding='utf-8')
+
+          replace_once('android/app/build.gradle', 'versionCode 15', 'versionCode 16')
+          replace_once('android/app/build.gradle', 'versionName "0.6.9"', 'versionName "0.6.10"')
+          replace_once("src/App.tsx", "const CURRENT_VERSION = '0.6.9';", "const CURRENT_VERSION = '0.6.10';")
+          replace_once(
+              'src/App.tsx',
+              '          <section className="changelog-entry"><strong>v0.6.9</strong>',
+              '          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.9</strong>'
+          )
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: |
+          npm test -- --run
+          cd android
+          ./gradlew testDebugUnitTest
+
+      - name: Production web build
+        run: npm run build
+
+      - name: Commit candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add android/app/src/main/java/com/puff/meme/FloatingWindowService.java android/app/build.gradle package.json package-lock.json src/App.tsx
+          git commit -m "fix(android): preserve floating recovery preference"
+          git push origin HEAD:fix/floating-recovery-0610
