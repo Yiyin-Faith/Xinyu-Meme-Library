@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/floating-cache-0611]
   workflow_dispatch:
 
 permissions:
