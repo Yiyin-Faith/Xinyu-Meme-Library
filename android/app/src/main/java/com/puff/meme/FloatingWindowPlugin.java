@@ -59,6 +59,7 @@ public class FloatingWindowPlugin extends Plugin {
     public void setEnabled(PluginCall call) {
         boolean enabled = call.getBoolean("enabled", false);
         if (enabled && !Settings.canDrawOverlays(getContext())) {
+            RecommendationHintOverlay.dismiss();
             FloatingWindowService.setEnabledPreference(getContext(), false);
             call.resolve(status());
             return;
@@ -69,6 +70,7 @@ public class FloatingWindowPlugin extends Plugin {
                 FloatingWindowService.setEnabledPreference(getContext(), true);
                 FloatingWindowService.start(getContext());
             } else {
+                RecommendationHintOverlay.dismiss();
                 FloatingWindowService.clearEnableAfterGrantPending(getContext());
                 FloatingWindowService.setEnabledPreference(getContext(), false);
                 FloatingWindowService.stop(getContext());
