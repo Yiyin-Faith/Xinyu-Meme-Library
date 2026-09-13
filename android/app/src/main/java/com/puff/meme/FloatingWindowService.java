@@ -236,7 +236,10 @@ public class FloatingWindowService extends Service {
         } catch (Exception ignored) {
             hideMiniLibrary(false);
             hideBubble();
-            setEnabledPreference(this, false);
+            // A transient WindowManager / foreground-service startup failure must
+            // not erase the user's persisted choice. Stop only this failed
+            // instance; AccessibilityService reconnect or the next foreground
+            // sync can retry while the enabled preference remains true.
             stopSelf();
             return START_NOT_STICKY;
         }

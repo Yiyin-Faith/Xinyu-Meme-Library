@@ -21,7 +21,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.6.9';
+const CURRENT_VERSION = '0.6.10';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -480,6 +480,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.9</strong><ul><li>关键词命中不再自动展开整块迷你表情库，改为在悬浮球旁显示短暂提示气泡；点击气泡后才进入对应标签或推荐结果。</li><li>无障碍服务或应用进程被系统重建后，会从已有的私有迷你图库缓存恢复标签索引；悬浮窗仍开启且权限有效时会尝试恢复前台悬浮服务，减少后台一段时间后推荐失效。</li><li>悬浮窗或关键词推荐关闭时会同步移除尚未消失的推荐气泡。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.8</strong><ul><li>修复部分 Android 文件提供器会给原始备份图片自动补扩展名，导致手工压缩 ZIP 或原始文件夹无法恢复的问题。</li><li>修复因此导致“原始备份复制成功，但勾选打包 ZIP 后压缩失败”的问题；最终生成的正式 ZIP 继续使用标准 images/&lt;sha256&gt; 结构。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.7</strong><ul><li>备份路径现在按唯一 manifest 和 images/hash 根目录统一归一化，支持任意重命名的单层外包装；无扩展名原图可从文件夹、ZIP 或 SAF 文件夹恢复。</li><li>严格拒绝非法路径、多个备份根和未知备份 payload；Android SAF 只列举并流式读取文件，由 JS 统一校验。</li><li>后台任务完成或失败后会自动收起，运行中的任务会持续保留，手动关闭仍然有效。</li></ul></section>
