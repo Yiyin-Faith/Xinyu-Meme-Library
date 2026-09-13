@@ -160,8 +160,8 @@ public class FloatingWindowService extends Service {
     }
 
     /** Called by the WebView whenever IndexedDB changes; no original image bytes are included. */
-    public static void syncMiniCatalog(Context context, JSONArray items) {
-        FloatingMiniLibraryCache.get(context).syncCatalog(items == null ? new JSONArray() : items);
+    public static List<String> syncMiniCatalog(Context context, JSONArray items) {
+        List<String> missingThumbnailIds = FloatingMiniLibraryCache.get(context).syncCatalog(items == null ? new JSONArray() : items);
         FloatingWindowService service = activeService;
         if (service != null) {
             service.mainHandler.post(() -> {
@@ -170,6 +170,7 @@ public class FloatingWindowService extends Service {
                 if (service.panel != null) service.reloadMiniLibrary();
             });
         }
+        return missingThumbnailIds;
     }
 
     /** Receives a page generated asynchronously from the current IndexedDB records. */

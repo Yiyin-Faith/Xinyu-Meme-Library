@@ -16,6 +16,8 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.util.List;
+
 @CapacitorPlugin(name = "FloatingWindow")
 public class FloatingWindowPlugin extends Plugin {
     @PluginMethod
@@ -98,8 +100,12 @@ public class FloatingWindowPlugin extends Plugin {
     @PluginMethod
     public void syncMiniCatalog(PluginCall call) {
         JSArray items = call.getArray("items", new JSArray());
-        FloatingWindowService.syncMiniCatalog(getContext(), items);
-        call.resolve();
+        List<String> missing = FloatingWindowService.syncMiniCatalog(getContext(), items);
+        JSArray missingIds = new JSArray();
+        for (String id : missing) missingIds.put(id);
+        JSObject result = new JSObject();
+        result.put("missingThumbnailIds", missingIds);
+        call.resolve(result);
     }
 
     /**

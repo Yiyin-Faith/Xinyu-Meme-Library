@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFloatingMiniBridge, floatingMiniCatalog, floatingMiniTags, selectFloatingMiniMemes } from '../src/lib/floating-mini';
+import { createFloatingMiniBridge, floatingMiniCatalog, floatingMiniTags, selectFloatingMiniMemes, warmFloatingMiniThumbnails } from '../src/lib/floating-mini';
 import type { Meme } from '../src/types';
 
 function meme(id: string, tags: string[], overrides: Partial<Meme> = {}): Meme {
@@ -55,6 +55,21 @@ describe('floating mini library selection', () => {
     const [entry] = floatingMiniCatalog([meme('cached', ['猫猫'], { note: '聊天时用', useCount: 8, updatedAt: 9 })]);
     expect(entry).toMatchObject({ id: 'cached', title: 'cached', tags: ['猫猫'], note: '聊天时用', useCount: 8, updatedAt: 9 });
     expect(entry).not.toHaveProperty('blob');
+  });
+
+  it('warms only native thumbnails reported as missing', async () => {
+    const reports: Array<{ ids: string[]; libraryTotal: number }> = [];
+    const warmed = await warmFloatingMiniThumbnails(
+      memes,
+      ['new', 'also-used', 'does-not-exist'],
+      async (_requestId, snapshot) => {
+        if (!snapshot.ready) return;
+        reports.push({ ids: snapshot.items.map((item) => item.id), libraryTotal: snapshot.libraryTotal });
+      },
+    );
+
+    expect(warmed).toBe(2);
+    expect(reports).toEqual([{ ids: ['new', 'also-used'], libraryTotal: 3 }]);
   });
 
   it('reports the finished IndexedDB page through the native callback channel', async () => {

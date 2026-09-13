@@ -75,19 +75,35 @@ final class FloatingMiniLibraryCache {
         thumbnailDirectory = new File(root, THUMBNAILS_NAME);
     }
 
-    void syncCatalog(JSONArray input) {
+    List<String> syncCatalog(JSONArray input) {
         synchronized (lock) {
+            ensureLoadedLocked();
+            HashMap<String, Long> previousUpdatedAt = new HashMap<>();
+            for (Entry entry : entries) previousUpdatedAt.put(entry.id, entry.updatedAt);
+
             LinkedHashMap<String, Entry> next = new LinkedHashMap<>();
             for (int index = 0; index < input.length(); index++) {
                 JSONObject value = input.optJSONObject(index);
                 Entry entry = Entry.fromJson(value);
                 if (entry != null) next.put(entry.id, entry);
             }
+
+            // Keep thumbnails across usage-count/last-used updates, but force a
+            // refresh whenever the underlying meme itself was edited.
+            for (Entry entry : next.values()) {
+                Long previous = previousUpdatedAt.get(entry.id);
+                if (previous != null && previous.longValue() != entry.updatedAt) thumbnailFile(entry.id).delete();
+            }
+
             entries = Collections.unmodifiableList(new ArrayList<>(next.values()));
             catalogKnown = true;
             loaded = true;
             writeCatalogLocked();
             pruneThumbnailsLocked(next.keySet());
+
+            ArrayList<String> missing = new ArrayList<>();
+            for (Entry entry : entries) if (!hasUsableThumbnailLocked(entry.id)) missing.add(entry.id);
+            return missing;
         }
     }
 
@@ -259,9 +275,14 @@ final class FloatingMiniLibraryCache {
         }
     }
 
+    private boolean hasUsableThumbnailLocked(String id) {
+        File file = thumbnailFile(id);
+        return file.isFile() && file.length() > 0 && file.length() <= MAX_THUMBNAIL_BYTES;
+    }
+
     private String readThumbnailLocked(String id) {
         File file = thumbnailFile(id);
-        if (!file.isFile() || file.length() <= 0 || file.length() > MAX_THUMBNAIL_BYTES) return "";
+        if (!hasUsableThumbnailLocked(id)) return "";
         try {
             byte[] bytes = readBytes(file);
             return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP);

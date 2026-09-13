@@ -118,6 +118,39 @@ async function thumbnail(blob: Blob) {
   }
 }
 
+export async function warmFloatingMiniThumbnails(
+  memes: Meme[],
+  missingIds: string[],
+  reportSnapshot: FloatingMiniSnapshotReporter,
+  shouldContinue: () => boolean = () => true,
+) {
+  const missing = new Set(missingIds.filter(Boolean));
+  if (!missing.size) return 0;
+  const selected = memes.filter((meme) => missing.has(meme.id));
+  const pageSize = 12;
+  let warmed = 0;
+  for (let offset = 0; offset < selected.length && shouldContinue(); offset += pageSize) {
+    const items: FloatingMiniSnapshot['items'] = [];
+    for (const meme of selected.slice(offset, offset + pageSize)) {
+      if (!shouldContinue()) break;
+      items.push({ id: meme.id, title: meme.title, thumbnail: await thumbnail(meme.blob) });
+      warmed++;
+    }
+    if (!items.length) break;
+    await reportSnapshot(`warm-${Date.now()}-${offset}`, {
+      ready: true,
+      total: selected.length,
+      libraryTotal: memes.length,
+      tags: [],
+      items,
+    });
+    // Yield between small pages so opening the main app stays responsive even
+    // when an older install needs to fill a large missing-thumbnail cache.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  return warmed;
+}
+
 export function createFloatingMiniBridge(memes: Meme[], reportSnapshot?: FloatingMiniSnapshotReporter): FloatingMiniBridge {
   const getSnapshot = async (request: FloatingMiniRequest): Promise<FloatingMiniSnapshot> => {
     const selected = selectFloatingMiniMemes(memes, request);

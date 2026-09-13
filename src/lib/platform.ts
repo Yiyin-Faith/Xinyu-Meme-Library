@@ -17,7 +17,7 @@ interface NativeFloatingWindow extends Plugin {
   requestPermission(options: { enableAfterGrant: boolean }): Promise<AndroidFloatingWindowStatus>;
   setEnabled(options: { enabled: boolean }): Promise<AndroidFloatingWindowStatus>;
   setOpacity(options: { opacity: number }): Promise<AndroidFloatingWindowStatus>;
-  syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<void>;
+  syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<{ missingThumbnailIds?: string[] }>;
   deliverMiniSnapshot(options: { requestId: string; snapshot: FloatingMiniSnapshot | { ready: false } }): Promise<void>;
 }
 const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
@@ -52,12 +52,15 @@ export async function setAndroidFloatingWindowOpacity(opacity: number): Promise<
 }
 
 /**
- * Stores metadata only for the native overlay's recovery cache. Original image
- * Blobs remain in IndexedDB; thumbnails are supplied only page-by-page.
+ * Stores metadata for the native overlay recovery cache and reports only the
+ * meme IDs whose small private thumbnails still need to be generated.
  */
-export async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogEntry[]): Promise<void> {
-  if (!isAndroid) return;
-  await FloatingWindow.syncMiniCatalog({ items });
+export async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogEntry[]): Promise<string[]> {
+  if (!isAndroid) return [];
+  const result = await FloatingWindow.syncMiniCatalog({ items });
+  return Array.isArray(result?.missingThumbnailIds)
+    ? result.missingThumbnailIds.filter((id): id is string => typeof id === 'string' && Boolean(id))
+    : [];
 }
 
 /** Completes a page request that Android WebView cannot return as a Promise. */
