@@ -3,8 +3,12 @@ package com.puff.meme;
 import android.accessibilityservice.AccessibilityService;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -70,6 +74,22 @@ public class MemeRecommendationAccessibilityService extends AccessibilityService
     public void onServiceConnected() {
         super.onServiceConnected();
         activeService = this;
+
+        // A killed/recreated process loses the static tag index. Rehydrate it
+        // from the existing private mini-library catalog so recommendation does
+        // not depend on reopening the WebView. No external input text is read or
+        // persisted here; only the user's own meme tags are recovered.
+        restoreTagIndexFromCache();
+
+        // The floating ball already runs as a sticky foreground service, but a
+        // process recreation can leave only the persisted enabled preference.
+        // Bring it back when both the preference and overlay permission still
+        // say the user wants it. Never flip either setting on automatically.
+        if (FloatingWindowService.isEnabledPreference(this)
+                && Settings.canDrawOverlays(this)
+                && !FloatingWindowService.isOverlayShowing()) {
+            try { FloatingWindowService.start(this); } catch (Exception ignored) { }
+        }
     }
 
     @Override
@@ -137,7 +157,11 @@ public class MemeRecommendationAccessibilityService extends AccessibilityService
         lastInputFingerprint = fingerprint;
         lastInputAt = now;
         if (matches.isEmpty()) return;
-        if (!FloatingWindowService.showRecommendation(this, matches)) return;
+
+        // Do not open the whole mini library while the user is typing in another
+        // app. A small non-focusable hint appears instead; tapping that hint is
+        // the explicit action that opens the filtered recommendation panel.
+        if (!RecommendationHintOverlay.show(this, matches)) return;
 
         for (String tag : matches) tagCooldowns.put(tag, now);
         lastTriggeredTags = Collections.unmodifiableList(new ArrayList<>(matches));
@@ -154,9 +178,35 @@ public class MemeRecommendationAccessibilityService extends AccessibilityService
         lastTriggeredTags = Collections.emptyList();
     }
 
+    private void restoreTagIndexFromCache() {
+        try {
+            JSONObject request = new JSONObject();
+            request.put("filter", "frequent");
+            request.put("offset", 0);
+            request.put("limit", 1);
+            FloatingMiniLibraryCache.CachedSnapshot cached = FloatingMiniLibraryCache.get(this).snapshot(request);
+            if (!cached.catalogKnown || cached.payload == null) return;
+
+            JSONArray tags = cached.payload.optJSONArray("tags");
+            if (tags == null) return;
+            ArrayList<String> restored = new ArrayList<>();
+            for (int index = 0; index < tags.length(); index++) {
+                JSONObject tag = tags.optJSONObject(index);
+                if (tag == null) continue;
+                String name = tag.optString("name", "").trim();
+                if (!name.isEmpty()) restored.add(name);
+            }
+            setTagIndex(restored);
+        } catch (Exception ignored) {
+            // The cache is replaceable. Keep any live in-memory index instead of
+            // disabling recommendations because a recovery file is unavailable.
+        }
+    }
+
     private void clearTransientState() {
         inputSequence++;
         handler.removeCallbacksAndMessages(null);
+        RecommendationHintOverlay.dismiss();
         tagCooldowns.clear();
         lastTriggeredTags = Collections.emptyList();
         lastInputFingerprint = 0;
