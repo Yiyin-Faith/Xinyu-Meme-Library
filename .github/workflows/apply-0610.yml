@@ -68,8 +68,9 @@ jobs:
 
       - name: Run tests
         run: |
-          npm test -- --run
+          npm test
           cd android
+          chmod +x gradlew
           ./gradlew testDebugUnitTest
 
       - name: Production web build
