@@ -49,7 +49,10 @@ public class AccessibilityRecommendationPlugin extends Plugin {
         }
         MemeRecommendationPreferences.setEnableAfterGrantPending(getContext(), false);
         MemeRecommendationPreferences.setProcessingEnabled(getContext(), enabled);
-        if (!enabled) MemeRecommendationAccessibilityService.noteRecommendationDismissed();
+        if (!enabled) {
+            RecommendationHintOverlay.dismiss();
+            MemeRecommendationAccessibilityService.noteRecommendationDismissed();
+        }
         call.resolve(status());
     }
 
