@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/floating-recovery-0610]
   workflow_dispatch:
 
 permissions:
