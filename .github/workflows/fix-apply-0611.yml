@@ -1,0 +1,26 @@
+name: Fix 0.6.11 apply workflow
+
+on:
+  push:
+    branches: [ci/fix-apply-floating-cache-0611]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ci/apply-floating-cache-0611
+          fetch-depth: 0
+      - name: Make yield environment-neutral
+        run: sed -i 's/window\.setTimeout(resolve, 0)/setTimeout(resolve, 0)/' .github/workflows/apply-0611.yml
+      - name: Commit workflow correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/apply-0611.yml
+          git commit -m "ci: make 0.6.11 warmup test environment-neutral"
+          git push origin HEAD:ci/apply-floating-cache-0611
