@@ -1,0 +1,168 @@
+name: Apply 0.6.11 mini cache fix
+
+on:
+  push:
+    branches: [ci/apply-floating-cache-0611]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/floating-cache-0611
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Apply mini cache recovery patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old[:160]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          cache = 'android/app/src/main/java/com/puff/meme/FloatingMiniLibraryCache.java'
+          replace_once(
+              cache,
+              '''    void syncCatalog(JSONArray input) {\n        synchronized (lock) {\n            LinkedHashMap<String, Entry> next = new LinkedHashMap<>();\n            for (int index = 0; index < input.length(); index++) {\n                JSONObject value = input.optJSONObject(index);\n                Entry entry = Entry.fromJson(value);\n                if (entry != null) next.put(entry.id, entry);\n            }\n            entries = Collections.unmodifiableList(new ArrayList<>(next.values()));\n            catalogKnown = true;\n            loaded = true;\n            writeCatalogLocked();\n            pruneThumbnailsLocked(next.keySet());\n        }\n    }''',
+              '''    List<String> syncCatalog(JSONArray input) {\n        synchronized (lock) {\n            ensureLoadedLocked();\n            HashMap<String, Long> previousUpdatedAt = new HashMap<>();\n            for (Entry entry : entries) previousUpdatedAt.put(entry.id, entry.updatedAt);\n\n            LinkedHashMap<String, Entry> next = new LinkedHashMap<>();\n            for (int index = 0; index < input.length(); index++) {\n                JSONObject value = input.optJSONObject(index);\n                Entry entry = Entry.fromJson(value);\n                if (entry != null) next.put(entry.id, entry);\n            }\n\n            // Keep thumbnails across usage-count/last-used updates, but force a\n            // refresh whenever the underlying meme itself was edited.\n            for (Entry entry : next.values()) {\n                Long previous = previousUpdatedAt.get(entry.id);\n                if (previous != null && previous.longValue() != entry.updatedAt) thumbnailFile(entry.id).delete();\n            }\n\n            entries = Collections.unmodifiableList(new ArrayList<>(next.values()));\n            catalogKnown = true;\n            loaded = true;\n            writeCatalogLocked();\n            pruneThumbnailsLocked(next.keySet());\n\n            ArrayList<String> missing = new ArrayList<>();\n            for (Entry entry : entries) if (!hasUsableThumbnailLocked(entry.id)) missing.add(entry.id);\n            return missing;\n        }\n    }'''
+          )
+          replace_once(
+              cache,
+              '''    private String readThumbnailLocked(String id) {\n        File file = thumbnailFile(id);\n        if (!file.isFile() || file.length() <= 0 || file.length() > MAX_THUMBNAIL_BYTES) return \"\";''',
+              '''    private boolean hasUsableThumbnailLocked(String id) {\n        File file = thumbnailFile(id);\n        return file.isFile() && file.length() > 0 && file.length() <= MAX_THUMBNAIL_BYTES;\n    }\n\n    private String readThumbnailLocked(String id) {\n        File file = thumbnailFile(id);\n        if (!hasUsableThumbnailLocked(id)) return \"\";'''
+          )
+
+          service = 'android/app/src/main/java/com/puff/meme/FloatingWindowService.java'
+          replace_once(
+              service,
+              '''    public static void syncMiniCatalog(Context context, JSONArray items) {\n        FloatingMiniLibraryCache.get(context).syncCatalog(items == null ? new JSONArray() : items);\n        FloatingWindowService service = activeService;\n        if (service != null) {\n            service.mainHandler.post(() -> {\n                // If the user left the panel open while changing the main\n                // library, refresh it against the newest bridge/cache state.\n                if (service.panel != null) service.reloadMiniLibrary();\n            });\n        }\n    }''',
+              '''    public static List<String> syncMiniCatalog(Context context, JSONArray items) {\n        List<String> missingThumbnailIds = FloatingMiniLibraryCache.get(context).syncCatalog(items == null ? new JSONArray() : items);\n        FloatingWindowService service = activeService;\n        if (service != null) {\n            service.mainHandler.post(() -> {\n                // If the user left the panel open while changing the main\n                // library, refresh it against the newest bridge/cache state.\n                if (service.panel != null) service.reloadMiniLibrary();\n            });\n        }\n        return missingThumbnailIds;\n    }'''
+          )
+
+          plugin = 'android/app/src/main/java/com/puff/meme/FloatingWindowPlugin.java'
+          replace_once(
+              plugin,
+              '''import com.getcapacitor.annotation.CapacitorPlugin;\n''',
+              '''import com.getcapacitor.annotation.CapacitorPlugin;\n\nimport java.util.List;\n'''
+          )
+          replace_once(
+              plugin,
+              '''    public void syncMiniCatalog(PluginCall call) {\n        JSArray items = call.getArray(\"items\", new JSArray());\n        FloatingWindowService.syncMiniCatalog(getContext(), items);\n        call.resolve();\n    }''',
+              '''    public void syncMiniCatalog(PluginCall call) {\n        JSArray items = call.getArray(\"items\", new JSArray());\n        List<String> missing = FloatingWindowService.syncMiniCatalog(getContext(), items);\n        JSArray missingIds = new JSArray();\n        for (String id : missing) missingIds.put(id);\n        JSObject result = new JSObject();\n        result.put(\"missingThumbnailIds\", missingIds);\n        call.resolve(result);\n    }'''
+          )
+
+          platform = 'src/lib/platform.ts'
+          replace_once(
+              platform,
+              '''  syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<void>;''',
+              '''  syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<{ missingThumbnailIds?: string[] }>;'''
+          )
+          replace_once(
+              platform,
+              '''/**\n * Stores metadata only for the native overlay's recovery cache. Original image\n * Blobs remain in IndexedDB; thumbnails are supplied only page-by-page.\n */\nexport async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogEntry[]): Promise<void> {\n  if (!isAndroid) return;\n  await FloatingWindow.syncMiniCatalog({ items });\n}''',
+              '''/**\n * Stores metadata for the native overlay recovery cache and reports only the\n * meme IDs whose small private thumbnails still need to be generated.\n */\nexport async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogEntry[]): Promise<string[]> {\n  if (!isAndroid) return [];\n  const result = await FloatingWindow.syncMiniCatalog({ items });\n  return Array.isArray(result?.missingThumbnailIds)\n    ? result.missingThumbnailIds.filter((id): id is string => typeof id === 'string' && Boolean(id))\n    : [];\n}'''
+          )
+
+          floating = 'src/lib/floating-mini.ts'
+          replace_once(
+              floating,
+              '''async function thumbnail(blob: Blob) {\n  const source = URL.createObjectURL(blob);''',
+              '''async function thumbnail(blob: Blob) {\n  const source = URL.createObjectURL(blob);'''
+          )
+          marker = '''export function createFloatingMiniBridge(memes: Meme[], reportSnapshot?: FloatingMiniSnapshotReporter): FloatingMiniBridge {'''
+          warm = '''export async function warmFloatingMiniThumbnails(\n  memes: Meme[],\n  missingIds: string[],\n  reportSnapshot: FloatingMiniSnapshotReporter,\n  shouldContinue: () => boolean = () => true,\n) {\n  const missing = new Set(missingIds.filter(Boolean));\n  if (!missing.size) return 0;\n  const selected = memes.filter((meme) => missing.has(meme.id));\n  const pageSize = 12;\n  let warmed = 0;\n  for (let offset = 0; offset < selected.length && shouldContinue(); offset += pageSize) {\n    const items: FloatingMiniSnapshot['items'] = [];\n    for (const meme of selected.slice(offset, offset + pageSize)) {\n      if (!shouldContinue()) break;\n      items.push({ id: meme.id, title: meme.title, thumbnail: await thumbnail(meme.blob) });\n      warmed++;\n    }\n    if (!items.length) break;\n    await reportSnapshot(`warm-${Date.now()}-${offset}`, {\n      ready: true,\n      total: selected.length,\n      libraryTotal: memes.length,\n      tags: [],\n      items,\n    });\n    // Yield between small pages so opening the main app stays responsive even\n    // when an older install needs to fill a large missing-thumbnail cache.\n    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));\n  }\n  return warmed;\n}\n\n'''
+          replace_once(floating, marker, warm + marker)
+
+          app = 'src/App.tsx'
+          replace_once(
+              app,
+              '''import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';''',
+              '''import { createFloatingMiniBridge, floatingMiniCatalog, warmFloatingMiniThumbnails, type FloatingMiniBridge } from './lib/floating-mini';'''
+          )
+          replace_once(
+              app,
+              '''    const bridge = createFloatingMiniBridge(memes, deliverAndroidFloatingMiniSnapshot);\n    window.__xinyuFloatingMini = bridge;\n    void syncAndroidFloatingMiniCatalog(floatingMiniCatalog(memes)).catch(() => undefined);\n    return () => { if (window.__xinyuFloatingMini === bridge) delete window.__xinyuFloatingMini; };''',
+              '''    let disposed = false;\n    const bridge = createFloatingMiniBridge(memes, deliverAndroidFloatingMiniSnapshot);\n    window.__xinyuFloatingMini = bridge;\n    void (async () => {\n      try {\n        const missingThumbnailIds = await syncAndroidFloatingMiniCatalog(floatingMiniCatalog(memes));\n        if (disposed || !missingThumbnailIds.length) return;\n        await warmFloatingMiniThumbnails(\n          memes,\n          missingThumbnailIds,\n          deliverAndroidFloatingMiniSnapshot,\n          () => !disposed,\n        );\n      } catch {\n        // This is a replaceable recovery cache. A failed warm-up must never\n        // affect the IndexedDB originals or block normal app startup.\n      }\n    })();\n    return () => {\n      disposed = true;\n      if (window.__xinyuFloatingMini === bridge) delete window.__xinyuFloatingMini;\n    };'''
+          )
+
+          tests = 'tests/floating-mini.test.ts'
+          replace_once(
+              tests,
+              '''import { createFloatingMiniBridge, floatingMiniCatalog, floatingMiniTags, selectFloatingMiniMemes } from '../src/lib/floating-mini';''',
+              '''import { createFloatingMiniBridge, floatingMiniCatalog, floatingMiniTags, selectFloatingMiniMemes, warmFloatingMiniThumbnails } from '../src/lib/floating-mini';'''
+          )
+          replace_once(
+              tests,
+              '''  it('reports the finished IndexedDB page through the native callback channel', async () => {''',
+              '''  it('warms only native thumbnails reported as missing', async () => {\n    const reports: Array<{ ids: string[]; libraryTotal: number }> = [];\n    const warmed = await warmFloatingMiniThumbnails(\n      memes,\n      ['new', 'also-used', 'does-not-exist'],\n      async (_requestId, snapshot) => {\n        if (!snapshot.ready) return;\n        reports.push({ ids: snapshot.items.map((item) => item.id), libraryTotal: snapshot.libraryTotal });\n      },\n    );\n\n    expect(warmed).toBe(2);\n    expect(reports).toEqual([{ ids: ['new', 'also-used'], libraryTotal: 3 }]);\n  });\n\n  it('reports the finished IndexedDB page through the native callback channel', async () => {'''
+          )
+
+          replace_once('package.json', '"version": "0.6.10"', '"version": "0.6.11"')
+          lock = Path('package-lock.json')
+          lock_text = lock.read_text(encoding='utf-8')
+          if lock_text.count('"version": "0.6.10"') < 2:
+              raise SystemExit('package-lock version markers missing')
+          lock.write_text(lock_text.replace('"version": "0.6.10"', '"version": "0.6.11"', 2), encoding='utf-8')
+          replace_once('android/app/build.gradle', 'versionCode 16', 'versionCode 17')
+          replace_once('android/app/build.gradle', 'versionName "0.6.10"', 'versionName "0.6.11"')
+          replace_once(app, "const CURRENT_VERSION = '0.6.10';", "const CURRENT_VERSION = '0.6.11';")
+          replace_once(
+              app,
+              '          <section className="changelog-entry"><strong>v0.6.10</strong>',
+              '          <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>\\n          <section className="changelog-entry"><strong>v0.6.10</strong>'
+          )
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Web tests
+        run: npm test
+
+      - name: Production web build
+        run: npm run build
+
+      - name: Android unit tests
+        run: |
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            android/app/src/main/java/com/puff/meme/FloatingMiniLibraryCache.java \
+            android/app/src/main/java/com/puff/meme/FloatingWindowService.java \
+            android/app/src/main/java/com/puff/meme/FloatingWindowPlugin.java \
+            android/app/build.gradle \
+            src/lib/platform.ts \
+            src/lib/floating-mini.ts \
+            src/App.tsx \
+            tests/floating-mini.test.ts \
+            package.json package-lock.json
+          git commit -m "fix(android): warm floating mini thumbnail cache"
+          git push origin HEAD:fix/floating-cache-0611
