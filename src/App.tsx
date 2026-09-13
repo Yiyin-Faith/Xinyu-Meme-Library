@@ -21,7 +21,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.6.8';
+const CURRENT_VERSION = '0.6.9';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -88,9 +88,9 @@ function App() {
         }
         if (current.enabled) return;
         const started = await setAndroidFloatingWindow(true);
-        if (!started.enabled) disablePreference('悬浮窗未能显示，已自动关闭开关');
+        if (!started.enabled) disablePreference('悬浮窗未能显示，请检查系统后台限制');
       } catch {
-        disablePreference('悬浮窗未能恢复，已自动关闭开关');
+        notify('悬浮窗恢复暂时失败，可稍后重试或检查系统后台限制');
       }
     };
     void syncFloatingWindow();
@@ -102,9 +102,9 @@ function App() {
   const tags = useMemo(() => { const counts = new Map<string, number>(); memes.forEach((m) => m.tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))); return [...counts].sort((a, b) => b[1] - a[1]); }, [memes]);
   useEffect(() => {
     if (!ready || !isAndroid) return;
-    // Only current user-owned tag names cross the native bridge. The native
-    // accessibility service retains them in process memory and never writes a
-    // parallel tag or keyword database.
+    // Only current user-owned tag names cross the native bridge. Android can
+    // rebuild them from the existing private mini-library metadata cache after
+    // process recreation; external input text is never persisted there.
     void setAndroidAccessibilityRecommendationTags(tags.map(([tag]) => tag)).catch(() => undefined);
   }, [ready, tags]);
   useEffect(() => {
@@ -436,7 +436,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
     try {
       const status = await requestAndroidAccessibilityRecommendationPermission(true);
       setRecommendation(status);
-      if (status.enabled) onNotify('输入关键词自动推荐已开启；仅命中自己的标签时才会展开候选表情');
+      if (status.enabled) onNotify('输入关键词自动推荐已开启；命中自己的标签时会显示提示气泡，点开后查看候选表情');
       else onNotify('已打开系统无障碍设置，请开启“心语输入表情推荐”；返回后会自动同步状态');
     } catch (error) { onNotify(error instanceof Error ? error.message : '无障碍权限设置失败'); }
     finally { setRecommendationRequesting(false); }
@@ -470,7 +470,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <SettingToggle title="启用在线补充" description="在本地结果之后提供 Memegen 在线搜索入口。" value={settings.onlineSupplement} onChange={(value) => set('onlineSupplement', value)} />
       <SettingToggle title="悬浮表情助手" description={isDesktop ? '让心语窗口保持在其他窗口上方，聊天时取图更顺手。' : isAndroid ? '显示可拖动的悬浮球；点按后展开只用于快速找图和分享的迷你表情库。' : '仅 Windows 和 Android 客户端可用。'} value={settings.floatingWindow} disabled={!isDesktop && !isAndroid} onChange={(value) => set('floatingWindow', value)} />
       {isAndroid && <label className="floating-opacity"><span><strong>悬浮窗透明度</strong><small>拖动后立即应用；较低透明度可减少对其他应用的遮挡。</small></span><div><input type="range" min="0.3" max="1" step="0.05" value={floatingOpacity} aria-label="悬浮窗透明度" onChange={(event) => changeFloatingOpacity(Number(event.target.value))} /><output>{Math.round(floatingOpacity * 100)}%</output></div></label>}
-      {isAndroid && <><SettingToggle title="输入关键词自动推荐表情" description={settings.floatingWindow ? '默认关闭。仅在命中你自己的标签时展开候选表情，不会自动发送。' : '需要先开启悬浮表情助手，推荐候选才有安全的显示位置。'} value={recommendation.enabled} disabled={!settings.floatingWindow || recommendationRequesting} onChange={changeRecommendation} /><label className="recommendation-mode"><span><strong>关键词匹配方式</strong><small>完全匹配只匹配整个输入；包含关键词可匹配“我真的无语了”这类输入。</small></span><select aria-label="关键词匹配方式" value={recommendation.mode} disabled={!settings.floatingWindow || recommendationRequesting} onChange={(event) => changeRecommendationMode(event.target.value as 'exact' | 'contains')}><option value="exact">完全匹配</option><option value="contains">包含关键词</option></select></label></>}
+      {isAndroid && <><SettingToggle title="输入关键词自动推荐表情" description={settings.floatingWindow ? '默认关闭。命中你自己的标签时只显示短暂提示气泡，点击后才展开候选表情，不会自动发送。' : '需要先开启悬浮表情助手，推荐候选才有安全的显示位置。'} value={recommendation.enabled} disabled={!settings.floatingWindow || recommendationRequesting} onChange={changeRecommendation} /><label className="recommendation-mode"><span><strong>关键词匹配方式</strong><small>完全匹配只匹配整个输入；包含关键词可匹配“我真的无语了”这类输入。</small></span><select aria-label="关键词匹配方式" value={recommendation.mode} disabled={!settings.floatingWindow || recommendationRequesting} onChange={(event) => changeRecommendationMode(event.target.value as 'exact' | 'contains')}><option value="exact">完全匹配</option><option value="contains">包含关键词</option></select></label></>}
     </div>
     <div className="settings-card glass">
       <div className="setting-title"><div className="setting-icon"><RefreshCw size={18} /></div><div><h2>更新</h2><p>检查新版本，并查看功能变化。</p></div></div>
@@ -478,6 +478,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.6.9</strong><ul><li>关键词命中不再自动展开整块迷你表情库，改为在悬浮球旁显示短暂提示气泡；点击气泡后才进入对应标签或推荐结果。</li><li>无障碍服务或应用进程被系统重建后，会从已有的私有迷你图库缓存恢复标签索引；悬浮窗仍开启且权限有效时会尝试恢复前台悬浮服务，减少后台一段时间后推荐失效。</li><li>悬浮窗或关键词推荐关闭时会同步移除尚未消失的推荐气泡。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.8</strong><ul><li>修复部分 Android 文件提供器会给原始备份图片自动补扩展名，导致手工压缩 ZIP 或原始文件夹无法恢复的问题。</li><li>修复因此导致“原始备份复制成功，但勾选打包 ZIP 后压缩失败”的问题；最终生成的正式 ZIP 继续使用标准 images/&lt;sha256&gt; 结构。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.7</strong><ul><li>备份路径现在按唯一 manifest 和 images/hash 根目录统一归一化，支持任意重命名的单层外包装；无扩展名原图可从文件夹、ZIP 或 SAF 文件夹恢复。</li><li>严格拒绝非法路径、多个备份根和未知备份 payload；Android SAF 只列举并流式读取文件，由 JS 统一校验。</li><li>后台任务完成或失败后会自动收起，运行中的任务会持续保留，手动关闭仍然有效。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.6</strong><ul><li>恢复入口拆成「从 ZIP 恢复」和「从备份文件夹恢复」：Android 可以直接选择未压缩的备份目录，不再需要先手动打包 ZIP。</li><li>手动压缩的备份 ZIP 现在可以正常识别：允许顶层 images/ 目录项和单一 xinyu-backup-* 外层文件夹（重命名过的文件夹也可以）。</li><li>非法路径、未知文件、多个无关根目录、缺少 manifest、manifest 格式错误、原图缺失、hash 校验失败、增量缺少基准各自给出明确提示，不再统一显示「备份包含未知路径」。</li><li>ZIP 与备份文件夹共用同一套校验与合并逻辑，恢复结果完全一致。</li></ul></section>
@@ -773,8 +774,6 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     const label = `${backupMode === 'full' ? '完整' : '增量'}备份导出`;
     const taskId = startTask({ id: `backup-${Date.now()}`, kind: 'backup', title: label, label: '准备导出…', detail: '', badge: '准备中', percentage: 0, indeterminate: true });
     setActiveTaskId(taskId);
-    // Every status update is mirrored into the shared task so the dock keeps
-    // showing progress after this modal is closed.
     const push = (status: BackupStatus) => {
       const view = describeBackupStatus(status);
       setExportPhase(status.phase);
@@ -842,11 +841,6 @@ function BackupModal({ onClose, onNotify }: { onClose: () => void; onNotify: (me
     }
     finally { setBusy(false); }
   };
-  /**
-   * Android restore straight from an uncompressed backup folder. The picker
-   * hands back a `content://` tree, the native side streams each file, and the
-   * ZIP path's whitelist and checks are reused unchanged.
-   */
   const restoreFolder = async () => {
     setBusy(true);
     const taskId = startTask({ id: `restore-${Date.now()}`, kind: 'restore', title: '从备份文件夹恢复', label: '请选择备份文件夹…', detail: '', badge: '等待选择', percentage: 0, indeterminate: true });
