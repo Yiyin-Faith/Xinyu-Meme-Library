@@ -30,9 +30,11 @@ jobs:
       - name: Switch to candidate and apply patch
         run: |
           cp .github/apply-070.py /tmp/apply-070.py
+          cp .github/fix-070.py /tmp/fix-070.py
           git fetch origin feature/visual-crop-idle-capsule-070
           git switch -C feature/visual-crop-idle-capsule-070 origin/feature/visual-crop-idle-capsule-070
           python /tmp/apply-070.py
+          python /tmp/fix-070.py
 
       - name: Install dependencies
         run: npm ci
