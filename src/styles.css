@@ -366,3 +366,32 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 @media (max-width: 480px) {
   .task-dock { right: 10px; bottom: calc(10px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); left: 10px; width: auto; }
 }
+
+
+/* v0.7.0: touch-first visual cropper. */
+.visual-cropper-shell { display: grid; gap: 7px; padding: 10px; border-radius: 14px; background: rgba(229, 241, 232, .54); border: 1px solid rgba(82, 126, 96, .16); }
+.visual-cropper-stage { position: relative; width: 100%; margin: 0 auto; overflow: hidden; border-radius: 12px; background: #1f2823; touch-action: none; user-select: none; -webkit-user-select: none; }
+.visual-cropper-stage > img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.visual-crop-selection { position: absolute; left: var(--crop-left); top: var(--crop-top); width: var(--crop-width); height: var(--crop-height); border: 2px solid rgba(244, 255, 246, .96); box-shadow: 0 0 0 9999px rgba(12, 20, 15, .52), 0 0 0 1px rgba(52, 106, 70, .55); cursor: move; touch-action: none; }
+.crop-grid-line { position: absolute; pointer-events: none; background: rgba(255,255,255,.38); }
+.crop-grid-v { top: 0; bottom: 0; width: 1px; }
+.crop-grid-h { left: 0; right: 0; height: 1px; }
+.crop-grid-v.one { left: 33.333%; } .crop-grid-v.two { left: 66.666%; }
+.crop-grid-h.one { top: 33.333%; } .crop-grid-h.two { top: 66.666%; }
+.crop-handle { position: absolute; width: 38px; height: 38px; margin: -19px; touch-action: none; z-index: 3; }
+.crop-handle::after { content: ''; position: absolute; left: 50%; top: 50%; width: 11px; height: 11px; transform: translate(-50%, -50%); border-radius: 4px; background: #f8fff9; box-shadow: 0 1px 4px rgba(19,48,31,.34); }
+.crop-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle-n { left: 50%; top: 0; cursor: ns-resize; }
+.crop-handle-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-handle-e { left: 100%; top: 50%; cursor: ew-resize; }
+.crop-handle-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-handle-s { left: 50%; top: 100%; cursor: ns-resize; }
+.crop-handle-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-handle-w { left: 0; top: 50%; cursor: ew-resize; }
+.visual-crop-hint { color: #7d9185; text-align: center; font-size: 10px; }
+.crop-instruction { color: #728a7c; font-size: 11px; line-height: 1.55; }
+@media (max-width: 720px) {
+  .visual-cropper-shell { padding: 8px; }
+  .crop-handle { width: 42px; height: 42px; margin: -21px; }
+  .crop-handle::after { width: 12px; height: 12px; }
+}

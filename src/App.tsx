@@ -8,12 +8,13 @@ import {
 import type { Collection, Meme, OnlineMeme, Settings as PreferenceSettings, View } from './types';
 import MemeCard, { useBlobUrl } from './components/MemeCard';
 import Modal from './components/Modal';
+import VisualCropper from './components/VisualCropper';
 import { db, defaultSettings, deleteMemes, ensureCollections, formatBytes, getOrCreateCollection, importImages, importPrefilledImages, initializeLibrary, markUsed, matchesSearch, normalizeTags, saveEditedMeme, updateMeme } from './lib/library';
 import { commitBackupExportPlan, createBackupExportPlan, exportBackupPlan, mergeBackup, readBackup, type BackupMode, type ExportProgress } from './lib/backup';
 import { analyzeImportEntries, analyzeImportZip, requiredCollections, type ImportAnalysis } from './lib/import-source';
 import { AndroidBackupCopyError, exportAndroidBackup, notifyAndroidTask, type AndroidBackupProgress } from './lib/android-backup';
 import { isAndroidFolderRestoreAvailable, pickAndroidBackupFolder, readAndroidBackupFolder } from './lib/android-restore';
-import { canEditImage, clampCrop, editedDimensions, fullCrop, isNoopEdit, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
+import { canEditImage, editedDimensions, fullCrop, isNoopEdit, renderEditedImage, renderEditedPreview, type CropRect } from './lib/image-edit';
 import { dismissTask, failTask, finishTask, startTask, updateTask, useTasks, type BackgroundTask, type TaskProgress } from './lib/tasks';
 import { fetchOnlineImage, searchOnline } from './lib/online';
 import { deliverAndroidFloatingMiniSnapshot, getAndroidAccessibilityRecommendationStatus, getAndroidFloatingWindowStatus, isAndroid, isDesktop, platformName, requestAndroidAccessibilityRecommendationPermission, requestAndroidFloatingWindowPermission, saveBlob, setAndroidAccessibilityRecommendationEnabled, setAndroidAccessibilityRecommendationMode, setAndroidAccessibilityRecommendationTags, setAndroidFloatingWindow, setAndroidFloatingWindowOpacity, setAlwaysOnTop, syncAndroidFloatingMiniCatalog, useImage } from './lib/platform';
@@ -21,7 +22,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, warmFloatingMiniThumbnails, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.6.11';
+const CURRENT_VERSION = '0.7.0';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -498,7 +499,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
-          <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.7.0</strong><ul><li>图片编辑新增可视化拖拽裁切：直接拖动图片上的边框、四边和四角即可裁图，不再要求输入 X / Y / 宽 / 高。</li><li>Android 悬浮球闲置约 6 秒后自动收缩成贴边竖向胶囊，触摸、拖动、打开迷你库或关键词推荐时会立即恢复圆球。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.9</strong><ul><li>关键词命中不再自动展开整块迷你表情库，改为在悬浮球旁显示短暂提示气泡；点击气泡后才进入对应标签或推荐结果。</li><li>无障碍服务或应用进程被系统重建后，会从已有的私有迷你图库缓存恢复标签索引；悬浮窗仍开启且权限有效时会尝试恢复前台悬浮服务，减少后台一段时间后推荐失效。</li><li>悬浮窗或关键词推荐关闭时会同步移除尚未消失的推荐气泡。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.8</strong><ul><li>修复部分 Android 文件提供器会给原始备份图片自动补扩展名，导致手工压缩 ZIP 或原始文件夹无法恢复的问题。</li><li>修复因此导致“原始备份复制成功，但勾选打包 ZIP 后压缩失败”的问题；最终生成的正式 ZIP 继续使用标准 images/&lt;sha256&gt; 结构。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.7</strong><ul><li>备份路径现在按唯一 manifest 和 images/hash 根目录统一归一化，支持任意重命名的单层外包装；无扩展名原图可从文件夹、ZIP 或 SAF 文件夹恢复。</li><li>严格拒绝非法路径、多个备份根和未知备份 payload；Android SAF 只列举并流式读取文件，由 JS 统一校验。</li><li>后台任务完成或失败后会自动收起，运行中的任务会持续保留，手动关闭仍然有效。</li></ul></section>
@@ -549,19 +550,17 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
     if (!editable) return;
     let active = true;
     let previewUrl = '';
-    void renderEditedPreview(meme.blob, crop, rotation, flip).then((image) => {
+    // The crop box is a cheap DOM overlay. Re-render only the full transformed
+    // preview when rotation/flip changes, never on pointermove.
+    void renderEditedPreview(meme.blob, fullCrop(meme.width, meme.height), rotation, flip).then((image) => {
       previewUrl = URL.createObjectURL(image);
       if (active) setEditPreview(previewUrl);
       else URL.revokeObjectURL(previewUrl);
     }).catch(() => undefined);
     return () => { active = false; if (previewUrl) URL.revokeObjectURL(previewUrl); };
-  }, [editable, meme.blob, crop.x, crop.y, crop.width, crop.height, rotation, flip]);
+  }, [editable, meme.blob, meme.width, meme.height, rotation, flip]);
 
-  const changeCrop = (field: keyof CropRect, value: string) => {
-    const number = Number(value);
-    setCrop((current) => clampCrop({ ...current, [field]: Number.isFinite(number) ? number : current[field] }, meme.width, meme.height));
-  };
-  const resetEdits = () => { setCrop(fullCrop(meme.width, meme.height)); setRotation(0); setFlip(false); };
+  const resetCrop = () => { setCrop(fullCrop(meme.width, meme.height)); };
   const save = async () => {
     try {
       await updateMeme(meme.id, changes);
@@ -598,13 +597,13 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
   return <>
   <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" onClose={editing ? () => undefined : onClose}>
     <div className="edit-layout">
-      <div className="edit-preview edit-preview-result"><img src={editPreview || url} alt={meme.title} /></div>
+      {editable ? <VisualCropper imageUrl={editPreview || url} alt={meme.title} crop={crop} sourceWidth={meme.width} sourceHeight={meme.height} rotation={rotation} flipHorizontal={flip} onChange={setCrop} /> : <div className="edit-preview edit-preview-result"><img src={url} alt={meme.title} /></div>}
       <div className="edit-fields">
         <label>标题<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></label>
         <label>标签<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="例如：开心 反应 朋友" /></label>
         <label>收藏夹<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">未分类</option>{collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label>
-        {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button><button type="button" className={`glass-button ${flip ? 'selected-mode' : ''}`} aria-pressed={flip} onClick={() => setFlip((value) => !value)}><FlipHorizontal size={14} /> 水平翻转</button></div><div className="crop-fields"><label>X<input inputMode="numeric" type="number" min="0" max={meme.width - 1} value={crop.x} onChange={(event) => changeCrop('x', event.target.value)} /></label><label>Y<input inputMode="numeric" type="number" min="0" max={meme.height - 1} value={crop.y} onChange={(event) => changeCrop('y', event.target.value)} /></label><label>宽<input inputMode="numeric" type="number" min="1" max={meme.width} value={crop.width} onChange={(event) => changeCrop('width', event.target.value)} /></label><label>高<input inputMode="numeric" type="number" min="1" max={meme.height} value={crop.height} onChange={(event) => changeCrop('height', event.target.value)} /></label></div><button type="button" className="text-button" onClick={resetEdits}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
+        {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><p className="crop-instruction">直接拖动上方图片中的裁切框，不需要填写 X / Y 坐标。</p><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button><button type="button" className={`glass-button ${flip ? 'selected-mode' : ''}`} aria-pressed={flip} onClick={() => setFlip((value) => !value)}><FlipHorizontal size={14} /> 水平翻转</button></div><button type="button" className="text-button" onClick={resetCrop}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
         <div className="edit-actions"><span /><button className="glass-button" disabled={editing} onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" disabled={editing} onClick={() => { void save(); }}><Check size={16} /> 保存信息</button></div>
         {editable && <div className="image-save-actions"><button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={requestReplace}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
         {editable && <p className="image-save-hint">“覆盖原图”会替换这张图片的原始像素，并与图库中的其他设备同步为删除旧图；覆盖前会再确认一次。</p>}

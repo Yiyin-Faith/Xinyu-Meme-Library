@@ -78,6 +78,10 @@ public class FloatingWindowService extends Service {
     private static final String EDGE_RIGHT = "right";
     private static final float DEFAULT_OPACITY = 0.82f;
     private static final float MIN_OPACITY = 0.30f;
+    private static final long IDLE_DELAY_MS = 6_000L;
+    private static final int ACTIVE_BUBBLE_SIZE_DP = 56;
+    private static final int IDLE_BUBBLE_WIDTH_DP = 20;
+    private static final int IDLE_BUBBLE_HEIGHT_DP = 52;
     private static final int PAGE_SIZE = 24;
     private static final String FILTER_FREQUENT = "frequent";
     private static final String FILTER_RECOMMENDED = "recommended";
@@ -90,6 +94,8 @@ public class FloatingWindowService extends Service {
     private WindowManager windowManager;
     private View bubble;
     private WindowManager.LayoutParams bubbleLayoutParams;
+    private boolean bubbleIdle;
+    private final Runnable idleBubble = this::enterIdleBubble;
     private View panel;
     private WindowManager.LayoutParams panelLayoutParams;
     private EditText panelSearch;
@@ -132,6 +138,16 @@ public class FloatingWindowService extends Service {
 
     public static boolean isOverlayShowing() {
         return overlayShowing;
+    }
+
+    public static void noteRecommendationActivity() {
+        FloatingWindowService service = activeService;
+        if (service != null) service.mainHandler.post(service::activateBubble);
+    }
+
+    public static void noteRecommendationFinished() {
+        FloatingWindowService service = activeService;
+        if (service != null) service.mainHandler.post(service::scheduleBubbleIdle);
     }
 
     public static void start(Context context) {
@@ -287,17 +303,16 @@ public class FloatingWindowService extends Service {
         if (bubble != null) return;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         TextView view = new TextView(this);
-        view.setText("心");
         view.setTextColor(Color.WHITE);
-        view.setTextSize(23);
         view.setGravity(Gravity.CENTER);
         view.setContentDescription("展开迷你表情库");
-        view.setBackground(roundRect(Color.rgb(78, 125, 96), dp(28), Color.argb(80, 255, 255, 255), dp(2)));
         view.setElevation(dp(8));
         view.setAlpha(getOpacity(this));
+        bubbleIdle = false;
+        applyBubbleAppearance(view);
         bubbleLayoutParams = new WindowManager.LayoutParams(
-            dp(56),
-            dp(56),
+            dp(ACTIVE_BUBBLE_SIZE_DP),
+            dp(ACTIVE_BUBBLE_SIZE_DP),
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
@@ -308,6 +323,7 @@ public class FloatingWindowService extends Service {
         windowManager.addView(view, bubbleLayoutParams);
         bubble = view;
         overlayShowing = true;
+        scheduleBubbleIdle();
     }
 
     private void hideBubble() {
@@ -324,11 +340,13 @@ public class FloatingWindowService extends Service {
     }
 
     private void toggleMiniLibrary() {
+        activateBubble();
         if (panel != null) hideMiniLibrary(panelOpenedByRecommendation);
         else showMiniLibrary(Collections.emptyList(), false);
     }
 
     private void showMiniLibrary(List<String> matchingTags, boolean fromRecommendation) {
+        activateBubble();
         if (bubble == null || windowManager == null || !Settings.canDrawOverlays(this)) return;
         List<String> cleaned = cleanTags(matchingTags);
         if (panel != null) {
@@ -399,6 +417,7 @@ public class FloatingWindowService extends Service {
         selectedTag = "";
         panelSearchText = "";
         if (bubble == null) windowManager = null;
+        else scheduleBubbleIdle();
     }
 
     private void buildMiniPanel() {
@@ -765,6 +784,7 @@ public class FloatingWindowService extends Service {
                 if (bubbleLayoutParams == null || windowManager == null) return false;
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
+                        activateBubble();
                         downX = event.getRawX();
                         downY = event.getRawY();
                         startX = bubbleLayoutParams.x;
@@ -786,10 +806,12 @@ public class FloatingWindowService extends Service {
                         snapBubbleToEdge();
                         saveBubblePosition();
                         if (!moved) toggleMiniLibrary();
+                        else scheduleBubbleIdle();
                         return true;
                     case MotionEvent.ACTION_CANCEL:
                         snapBubbleToEdge();
                         saveBubblePosition();
+                        scheduleBubbleIdle();
                         return true;
                     default:
                         return true;
@@ -798,10 +820,55 @@ public class FloatingWindowService extends Service {
         });
     }
 
+    private int bubbleEdgeInset() {
+        return bubbleIdle ? 0 : dp(8);
+    }
+
+    private void applyBubbleAppearance(TextView view) {
+        if (bubbleIdle) {
+            view.setText("");
+            view.setTextSize(1);
+            view.setBackground(roundRect(Color.rgb(78, 125, 96), dp(26), Color.argb(70, 255, 255, 255), dp(1)));
+            view.setContentDescription("展开心语悬浮助手");
+        } else {
+            view.setText("心");
+            view.setTextSize(23);
+            view.setBackground(roundRect(Color.rgb(78, 125, 96), dp(28), Color.argb(80, 255, 255, 255), dp(2)));
+            view.setContentDescription("展开迷你表情库");
+        }
+    }
+
+    private void setBubbleIdle(boolean idle) {
+        if (bubbleIdle == idle || bubble == null || bubbleLayoutParams == null || windowManager == null) return;
+        boolean onRight = bubbleIsOnRight(bubbleLayoutParams.x);
+        double ratio = bubbleRatio(bubbleLayoutParams.y);
+        bubbleIdle = idle;
+        bubbleLayoutParams.width = dp(idle ? IDLE_BUBBLE_WIDTH_DP : ACTIVE_BUBBLE_SIZE_DP);
+        bubbleLayoutParams.height = dp(idle ? IDLE_BUBBLE_HEIGHT_DP : ACTIVE_BUBBLE_SIZE_DP);
+        applyBubblePosition(onRight, ratio);
+        if (bubble instanceof TextView) applyBubbleAppearance((TextView) bubble);
+        try { windowManager.updateViewLayout(bubble, bubbleLayoutParams); } catch (Exception ignored) { }
+    }
+
+    private void activateBubble() {
+        mainHandler.removeCallbacks(idleBubble);
+        setBubbleIdle(false);
+    }
+
+    private void scheduleBubbleIdle() {
+        mainHandler.removeCallbacks(idleBubble);
+        if (bubble != null && panel == null) mainHandler.postDelayed(idleBubble, IDLE_DELAY_MS);
+    }
+
+    private void enterIdleBubble() {
+        if (bubble == null || panel != null) return;
+        setBubbleIdle(true);
+    }
+
     private void snapBubbleToEdge() {
         if (bubbleLayoutParams == null || bubble == null || windowManager == null) return;
-        int left = dp(8);
-        int right = Math.max(left, screenWidth() - bubbleLayoutParams.width - dp(8));
+        int left = bubbleEdgeInset();
+        int right = Math.max(left, screenWidth() - bubbleLayoutParams.width - bubbleEdgeInset());
         bubbleLayoutParams.x = bubbleLayoutParams.x + bubbleLayoutParams.width / 2 < screenWidth() / 2 ? left : right;
         bubbleLayoutParams.y = clampBubbleY(bubbleLayoutParams.y);
         try {
@@ -811,9 +878,9 @@ public class FloatingWindowService extends Service {
     }
 
     private int clampBubbleX(int value) {
-        int width = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.width;
-        int min = dp(8);
-        int max = Math.max(min, screenWidth() - width - dp(8));
+        int width = bubbleLayoutParams == null ? dp(ACTIVE_BUBBLE_SIZE_DP) : bubbleLayoutParams.width;
+        int min = bubbleEdgeInset();
+        int max = Math.max(min, screenWidth() - width - bubbleEdgeInset());
         return Math.max(min, Math.min(value, max));
     }
 
@@ -828,7 +895,7 @@ public class FloatingWindowService extends Service {
 
     /** Highest legal top edge for the bubble, above the navigation bar. */
     private int maxBubbleY() {
-        int height = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.height;
+        int height = bubbleLayoutParams == null ? dp(ACTIVE_BUBBLE_SIZE_DP) : bubbleLayoutParams.height;
         int min = minBubbleY();
         return Math.max(min, screenHeight() - safeBottom() - height - dp(8));
     }
@@ -850,15 +917,15 @@ public class FloatingWindowService extends Service {
     }
 
     private boolean bubbleIsOnRight(int x) {
-        int width = bubbleLayoutParams == null ? dp(56) : bubbleLayoutParams.width;
+        int width = bubbleLayoutParams == null ? dp(ACTIVE_BUBBLE_SIZE_DP) : bubbleLayoutParams.width;
         return x + width / 2 >= screenWidth() / 2;
     }
 
     /** Places the bubble on the given edge and relative height, clamped to the screen. */
     private void applyBubblePosition(boolean onRight, double ratio) {
         if (bubbleLayoutParams == null) return;
-        int min = dp(8);
-        int maxX = Math.max(min, screenWidth() - bubbleLayoutParams.width - dp(8));
+        int min = bubbleEdgeInset();
+        int maxX = Math.max(min, screenWidth() - bubbleLayoutParams.width - bubbleEdgeInset());
         bubbleLayoutParams.x = onRight ? maxX : min;
         bubbleLayoutParams.y = clampBubbleY(yForRatio(ratio));
     }

@@ -23,6 +23,101 @@ export function clampCrop(crop: CropRect, sourceWidth: number, sourceHeight: num
   return { x, y, width, height };
 }
 
+export type VisualCropAction = 'move' | 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+export function visualDimensions(sourceWidth: number, sourceHeight: number, rotation: number) {
+  const normalized = normalizeRotation(rotation);
+  return normalized === 90 || normalized === 270
+    ? { width: sourceHeight, height: sourceWidth }
+    : { width: sourceWidth, height: sourceHeight };
+}
+
+/** Map a source-space crop to the full transformed preview shown to the user. */
+export function sourceCropToVisual(
+  crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
+  rotation: number,
+  flipHorizontal = false,
+): CropRect {
+  const safe = clampCrop(crop, sourceWidth, sourceHeight);
+  const normalized = normalizeRotation(rotation);
+  let visual: CropRect;
+  if (normalized === 90) {
+    visual = { x: sourceHeight - (safe.y + safe.height), y: safe.x, width: safe.height, height: safe.width };
+  } else if (normalized === 180) {
+    visual = { x: sourceWidth - (safe.x + safe.width), y: sourceHeight - (safe.y + safe.height), width: safe.width, height: safe.height };
+  } else if (normalized === 270) {
+    visual = { x: safe.y, y: sourceWidth - (safe.x + safe.width), width: safe.height, height: safe.width };
+  } else {
+    visual = { ...safe };
+  }
+  if (flipHorizontal) {
+    const dimensions = visualDimensions(sourceWidth, sourceHeight, normalized);
+    visual = { ...visual, x: dimensions.width - (visual.x + visual.width) };
+  }
+  return visual;
+}
+
+/** Inverse of sourceCropToVisual; persisted CropRect values remain source-space. */
+export function visualCropToSource(
+  crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
+  rotation: number,
+  flipHorizontal = false,
+): CropRect {
+  const normalized = normalizeRotation(rotation);
+  const dimensions = visualDimensions(sourceWidth, sourceHeight, normalized);
+  let visual = clampCrop(crop, dimensions.width, dimensions.height);
+  if (flipHorizontal) visual = { ...visual, x: dimensions.width - (visual.x + visual.width) };
+  let source: CropRect;
+  if (normalized === 90) {
+    source = { x: visual.y, y: sourceHeight - (visual.x + visual.width), width: visual.height, height: visual.width };
+  } else if (normalized === 180) {
+    source = { x: sourceWidth - (visual.x + visual.width), y: sourceHeight - (visual.y + visual.height), width: visual.width, height: visual.height };
+  } else if (normalized === 270) {
+    source = { x: sourceWidth - (visual.y + visual.height), y: visual.x, width: visual.height, height: visual.width };
+  } else {
+    source = { ...visual };
+  }
+  return clampCrop(source, sourceWidth, sourceHeight);
+}
+
+/** Pure visual-space drag/resize helper used by the touch cropper. */
+export function adjustVisualCrop(
+  crop: CropRect,
+  action: VisualCropAction,
+  dx: number,
+  dy: number,
+  boundsWidth: number,
+  boundsHeight: number,
+  minimumSize = 1,
+): CropRect {
+  const safe = clampCrop(crop, boundsWidth, boundsHeight);
+  const minWidth = Math.max(1, Math.min(boundsWidth, minimumSize));
+  const minHeight = Math.max(1, Math.min(boundsHeight, minimumSize));
+  const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
+  if (action === 'move') {
+    return {
+      x: clamp(safe.x + dx, 0, boundsWidth - safe.width),
+      y: clamp(safe.y + dy, 0, boundsHeight - safe.height),
+      width: safe.width,
+      height: safe.height,
+    };
+  }
+
+  let left = safe.x;
+  let top = safe.y;
+  let right = safe.x + safe.width;
+  let bottom = safe.y + safe.height;
+  if (action.includes('w')) left = clamp(left + dx, 0, right - minWidth);
+  if (action.includes('e')) right = clamp(right + dx, left + minWidth, boundsWidth);
+  if (action.includes('n')) top = clamp(top + dy, 0, bottom - minHeight);
+  if (action.includes('s')) bottom = clamp(bottom + dy, top + minHeight, boundsHeight);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 export function editedDimensions(crop: CropRect, rotation: number) {
   const normalized = normalizeRotation(rotation);
   return normalized === 90 || normalized === 270

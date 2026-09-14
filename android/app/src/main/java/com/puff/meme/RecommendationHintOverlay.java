@@ -68,6 +68,7 @@ final class RecommendationHintOverlay {
 
     private static boolean showNow(Context context, List<String> tags) {
         dismissNow();
+        FloatingWindowService.noteRecommendationActivity();
         if (!FloatingWindowService.isEnabledPreference(context) || !Settings.canDrawOverlays(context)) return false;
 
         try {
@@ -124,6 +125,7 @@ final class RecommendationHintOverlay {
         }
         hintView = null;
         windowManager = null;
+        FloatingWindowService.noteRecommendationFinished();
     }
 
     private static void position(Context context, WindowManager.LayoutParams params) {
