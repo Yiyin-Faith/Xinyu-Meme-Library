@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/build-visual-crop-idle-capsule-070]
   workflow_dispatch:
 
 permissions:
