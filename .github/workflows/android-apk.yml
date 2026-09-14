@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [ci/build-share-crop-polish-071]
   workflow_dispatch:
 
 permissions:
