@@ -499,7 +499,9 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
-          <section className="changelog-entry"><strong>v0.7.0</strong><ul><li>图片编辑新增可视化拖拽裁切：直接拖动图片上的边框、四边和四角即可裁图，不再要求输入 X / Y / 宽 / 高。</li><li>Android 悬浮球闲置约 6 秒后自动收缩成贴边竖向胶囊，触摸、拖动、打开迷你库或关键词推荐时会立即恢复圆球。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>\n          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.7.0</strong><ul><li>图片编辑新增可视化拖拽裁切：直接拖动图片上的边框、四边和四角即可裁图，不再要求输入 X / Y / 宽 / 高。</li><li>Android 悬浮球闲置约 6 秒后自动收缩成贴边竖向胶囊，触摸、拖动、打开迷你库或关键词推荐时会立即恢复圆球。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>
+          <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.9</strong><ul><li>关键词命中不再自动展开整块迷你表情库，改为在悬浮球旁显示短暂提示气泡；点击气泡后才进入对应标签或推荐结果。</li><li>无障碍服务或应用进程被系统重建后，会从已有的私有迷你图库缓存恢复标签索引；悬浮窗仍开启且权限有效时会尝试恢复前台悬浮服务，减少后台一段时间后推荐失效。</li><li>悬浮窗或关键词推荐关闭时会同步移除尚未消失的推荐气泡。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.8</strong><ul><li>修复部分 Android 文件提供器会给原始备份图片自动补扩展名，导致手工压缩 ZIP 或原始文件夹无法恢复的问题。</li><li>修复因此导致“原始备份复制成功，但勾选打包 ZIP 后压缩失败”的问题；最终生成的正式 ZIP 继续使用标准 images/&lt;sha256&gt; 结构。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.7</strong><ul><li>备份路径现在按唯一 manifest 和 images/hash 根目录统一归一化，支持任意重命名的单层外包装；无扩展名原图可从文件夹、ZIP 或 SAF 文件夹恢复。</li><li>严格拒绝非法路径、多个备份根和未知备份 payload；Android SAF 只列举并流式读取文件，由 JS 统一校验。</li><li>后台任务完成或失败后会自动收起，运行中的任务会持续保留，手动关闭仍然有效。</li></ul></section>
@@ -595,8 +597,8 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
   const requestReplace = () => { if (!editable || editing) return; if (unchanged) { void saveEdited('replace'); return; } setReplaceConfirmOpen(true); };
 
   return <>
-  <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" onClose={editing ? () => undefined : onClose}>
-    <div className="edit-layout">
+  <Modal title="编辑表情" subtitle="名称、归类和基础图片编辑都只在本机完成。" wide={editable} onClose={editing ? () => undefined : onClose}>
+    <div className={`edit-layout ${editable ? 'visual-edit-layout' : ''}`}>
       {editable ? <VisualCropper imageUrl={editPreview || url} alt={meme.title} crop={crop} sourceWidth={meme.width} sourceHeight={meme.height} rotation={rotation} flipHorizontal={flip} onChange={setCrop} /> : <div className="edit-preview edit-preview-result"><img src={url} alt={meme.title} /></div>}
       <div className="edit-fields">
         <label>标题<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></label>

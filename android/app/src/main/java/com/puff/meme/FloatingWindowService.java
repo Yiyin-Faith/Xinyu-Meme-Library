@@ -142,12 +142,16 @@ public class FloatingWindowService extends Service {
 
     public static void noteRecommendationActivity() {
         FloatingWindowService service = activeService;
-        if (service != null) service.mainHandler.post(service::activateBubble);
+        if (service == null) return;
+        if (Looper.myLooper() == Looper.getMainLooper()) service.activateBubble();
+        else service.mainHandler.post(service::activateBubble);
     }
 
     public static void noteRecommendationFinished() {
         FloatingWindowService service = activeService;
-        if (service != null) service.mainHandler.post(service::scheduleBubbleIdle);
+        if (service == null) return;
+        if (Looper.myLooper() == Looper.getMainLooper()) service.scheduleBubbleIdle();
+        else service.mainHandler.post(service::scheduleBubbleIdle);
     }
 
     public static void start(Context context) {
