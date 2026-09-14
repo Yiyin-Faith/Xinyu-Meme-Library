@@ -19,6 +19,7 @@ interface NativeFloatingWindow extends Plugin {
   setOpacity(options: { opacity: number }): Promise<AndroidFloatingWindowStatus>;
   syncMiniCatalog(options: { items: FloatingMiniCatalogEntry[] }): Promise<{ missingThumbnailIds?: string[] }>;
   deliverMiniSnapshot(options: { requestId: string; snapshot: FloatingMiniSnapshot | { ready: false } }): Promise<void>;
+  sharePreparedFile(options: { path: string; mime: string; title: string; dialogTitle: string }): Promise<void>;
 }
 const FloatingWindow = registerPlugin<NativeFloatingWindow>('FloatingWindow');
 
@@ -67,6 +68,17 @@ export async function syncAndroidFloatingMiniCatalog(items: FloatingMiniCatalogE
 export async function deliverAndroidFloatingMiniSnapshot(requestId: string, snapshot: FloatingMiniSnapshot | { ready: false }): Promise<void> {
   if (!isAndroid) return;
   await FloatingWindow.deliverMiniSnapshot({ requestId, snapshot });
+}
+
+/** Stateless native share used by the system overlay; safe to call repeatedly. */
+export async function shareAndroidFloatingMeme(meme: Pick<Meme, 'blob' | 'mime' | 'title'>): Promise<boolean> {
+  if (!isAndroid) return false;
+  const shareBlob = meme.mime === 'image/svg+xml' ? await pngBlob(meme.blob) : meme.blob;
+  const suffix = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const path = `xinyu-share/floating-${suffix}.${extension(shareBlob.type || meme.mime)}`;
+  await Filesystem.writeFile({ path, data: await base64(shareBlob), directory: Directory.Data, recursive: true });
+  await FloatingWindow.sharePreparedFile({ path, mime: shareBlob.type || meme.mime, title: meme.title, dialogTitle: '发送这个表情' });
+  return true;
 }
 
 export async function getAndroidAccessibilityRecommendationStatus(): Promise<AndroidAccessibilityRecommendationStatus> {

@@ -33,6 +33,10 @@ describe('image editing helpers', () => {
     expect(visualDimensions(120, 80, 90)).toEqual({ width: 80, height: 120 });
   });
 
+  it('supports independent minimum width and height for touch-friendly crop handles', () => {
+    expect(adjustVisualCrop({ x: 30, y: 20, width: 100, height: 80 }, 'nw', 90, 70, 300, 200, { width: 48, height: 36 })).toEqual({ x: 82, y: 64, width: 48, height: 36 });
+  });
+
   it('moves and resizes visual crops without leaving the preview bounds', () => {
     expect(adjustVisualCrop({ x: 10, y: 10, width: 40, height: 30 }, 'move', 90, -30, 120, 80, 8)).toEqual({ x: 80, y: 0, width: 40, height: 30 });
     expect(adjustVisualCrop({ x: 10, y: 10, width: 40, height: 30 }, 'nw', 100, 100, 120, 80, 8)).toEqual({ x: 42, y: 32, width: 8, height: 8 });

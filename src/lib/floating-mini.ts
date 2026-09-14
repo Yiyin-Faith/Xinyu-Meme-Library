@@ -184,8 +184,8 @@ export function createFloatingMiniBridge(memes: Meme[], reportSnapshot?: Floatin
       if (!meme) return false;
       // Keep the selector independently testable in the Node test runner;
       // platform access is needed only for a real user-initiated share.
-      const { useImage } = await import('./platform');
-      await useImage(meme, true);
+      const { shareAndroidFloatingMeme } = await import('./platform');
+      if (!await shareAndroidFloatingMeme(meme)) return false;
       await markUsed(id);
       return true;
     },

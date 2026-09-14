@@ -77,6 +77,21 @@ export default function VisualCropper({ imageUrl, alt, crop, sourceWidth, source
     maxWidth: portraitMaxWidth ? `${portraitMaxWidth}px` : '100%',
   } as CSSProperties;
 
+  const cropped = visualCrop.x > 0.5 || visualCrop.y > 0.5
+    || visualCrop.x + visualCrop.width < dimensions.width - 0.5
+    || visualCrop.y + visualCrop.height < dimensions.height - 0.5;
+  const focusPortraitMaxWidth = visualCrop.height > visualCrop.width
+    ? Math.max(150, Math.round(300 * visualCrop.width / visualCrop.height))
+    : undefined;
+  const focusStyle = {
+    '--focus-image-width': `${(dimensions.width / visualCrop.width) * 100}%`,
+    '--focus-image-height': `${(dimensions.height / visualCrop.height) * 100}%`,
+    '--focus-image-left': `${-(visualCrop.x / visualCrop.width) * 100}%`,
+    '--focus-image-top': `${-(visualCrop.y / visualCrop.height) * 100}%`,
+    aspectRatio: `${visualCrop.width} / ${visualCrop.height}`,
+    maxWidth: focusPortraitMaxWidth ? `${focusPortraitMaxWidth}px` : '100%',
+  } as CSSProperties;
+
   return <div className="visual-cropper-shell">
     <div ref={stageRef} className="visual-cropper-stage" style={style} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
       <img src={imageUrl} alt={alt} draggable={false} />
@@ -87,5 +102,11 @@ export default function VisualCropper({ imageUrl, alt, crop, sourceWidth, source
       </div>
     </div>
     <small className="visual-crop-hint">拖动框内移动 · 拖四边或四角裁切</small>
+    {cropped && <div className="visual-crop-focus-block">
+      <div className="visual-crop-focus-head"><strong>裁切预览</strong><span>自动放大选定范围，保存结果以这里为准</span></div>
+      <div className="visual-crop-focus" style={focusStyle}>
+        <img src={imageUrl} alt={`${alt} 裁切预览`} draggable={false} />
+      </div>
+    </div>}
   </div>;
 }

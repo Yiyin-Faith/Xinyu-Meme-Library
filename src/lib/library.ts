@@ -88,11 +88,19 @@ export async function imageDimensions(blob: Blob) {
   } catch (error) { throw new Error(error instanceof Error && error.message.includes('4000') ? error.message : '图片损坏或设备不支持此格式'); }
   finally { URL.revokeObjectURL(url); }
 }
-export async function prepareImage(file: Blob, title: string, collectionId = '', source = '本地导入'): Promise<Meme> {
+export type KnownImageDimensions = { width: number; height: number };
+function validatedKnownDimensions(dimensions: KnownImageDimensions) {
+  const width = Math.max(1, Math.round(dimensions.width));
+  const height = Math.max(1, Math.round(dimensions.height));
+  if (width * height > 40_000_000) throw new Error('图片尺寸过大，最多支持 4000 万像素');
+  return { width, height };
+}
+export async function prepareImage(file: Blob, title: string, collectionId = '', source = '本地导入', knownDimensions?: KnownImageDimensions): Promise<Meme> {
   if (file.size > MAX_IMAGE_SIZE || !file.size) throw new Error('单张图片必须在 0～32 MB 之间');
   const mime = detectMime(new Uint8Array(await file.slice(0, 256).arrayBuffer()));
   const blob = new Blob([file], { type: mime });
-  const [id, dimensions] = await Promise.all([sha256(blob), imageDimensions(blob)]);
+  const dimensionsPromise = knownDimensions ? Promise.resolve(validatedKnownDimensions(knownDimensions)) : imageDimensions(blob);
+  const [id, dimensions] = await Promise.all([sha256(blob), dimensionsPromise]);
   const now = Date.now();
   return { id, blob, ...dimensions, title: title.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名表情', tags: [], note: '', collectionId, favorite: false, createdAt: now, updatedAt: now, lastUsedAt: 0, useCount: 0, mime, size: blob.size, source };
 }
@@ -206,7 +214,7 @@ export type ImageEditSaveResult = 'replaced' | 'copied' | 'unchanged' | 'already
  * backup can faithfully remove it on restore; saving a copy leaves the source
  * record untouched.
  */
-export async function saveEditedMeme(id: string, editedImage: Blob, mode: ImageEditSaveMode): Promise<ImageEditSaveResult> {
+export async function saveEditedMeme(id: string, editedImage: Blob, mode: ImageEditSaveMode, knownDimensions?: KnownImageDimensions): Promise<ImageEditSaveResult> {
   const original = await db.memes.get(id);
   if (!original) throw new Error('原图已不存在，请关闭后重新打开编辑页');
   const edited = await prepareImage(
@@ -214,6 +222,7 @@ export async function saveEditedMeme(id: string, editedImage: Blob, mode: ImageE
     mode === 'copy' ? `${original.title}（编辑）` : original.title,
     original.collectionId,
     original.source,
+    knownDimensions,
   );
   if (edited.id === original.id) return 'unchanged';
 

@@ -22,7 +22,7 @@ import { communityData, type CommunityPost, type MockProfile, type UploadQuota }
 import { createFloatingMiniBridge, floatingMiniCatalog, warmFloatingMiniThumbnails, type FloatingMiniBridge } from './lib/floating-mini';
 
 const viewLabels: Record<string, string> = { all: '全部表情', favorites: '喜欢的', recent: '最近使用', online: '在线补充', tags: '标签管理', sync: '导入与同步', settings: '偏好设置' };
-const CURRENT_VERSION = '0.7.0';
+const CURRENT_VERSION = '0.7.1';
 type PrimaryTab = 'community' | 'library' | 'profile';
 
 declare global {
@@ -499,6 +499,7 @@ function SettingsView({ settings, onNotify }: { settings: PreferenceSettings; on
       <details className="changelog">
         <summary><span>更新日志</span><ChevronRight size={16} /></summary>
         <div className="changelog-list">
+          <section className="changelog-entry"><strong>v0.7.1</strong><ul><li>修复 Android 迷你表情库分享一次后再次点击无响应的问题，悬浮发送改用独立的原生系统分享 Intent。</li><li>图片裁切增大四角触控热区，并在缩小裁切范围后实时显示放大的裁切预览；覆盖保存减少一次重复整图解码并立即显示保存状态。</li></ul></section>
           <section className="changelog-entry"><strong>v0.7.0</strong><ul><li>图片编辑新增可视化拖拽裁切：直接拖动图片上的边框、四边和四角即可裁图，不再要求输入 X / Y / 宽 / 高。</li><li>Android 悬浮球闲置约 6 秒后自动收缩成贴边竖向胶囊，触摸、拖动、打开迷你库或关键词推荐时会立即恢复圆球。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.11</strong><ul><li>修复后台恢复后关键词提示正常、但迷你表情库缩略图未缓存而无法显示的问题；仅补齐缺失的小缩略图，编辑后的旧缓存会自动失效。</li></ul></section>
           <section className="changelog-entry"><strong>v0.6.10</strong><ul><li>修复悬浮前台服务在临时启动异常时错误清除用户启用状态的问题；仅在悬浮窗权限确实被撤销时关闭开关，临时失败会保留设置并等待后续自动重试。</li></ul></section>
@@ -573,6 +574,9 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
   const saveEdited = async (mode: 'replace' | 'copy') => {
     if (!editable) return;
     setEditing(true);
+    setReplaceConfirmOpen(false);
+    // Give the WebView one frame to paint the busy state before PNG encoding.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
       if (unchanged) {
         await updateMeme(meme.id, changes);
@@ -584,7 +588,7 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
       // The image save reads the record again, so its metadata stays aligned
       // with the fields the user has just edited in this modal.
       await updateMeme(meme.id, changes);
-      const result = await saveEditedMeme(meme.id, image, mode);
+      const result = await saveEditedMeme(meme.id, image, mode, output);
       if (result === 'unchanged') { onNotify('图片没有发生变化，已保存名称、标签和分组'); onClose(); return; }
       if (result === 'already-exists') { onNotify('相同的编辑结果已在图库中，已保存信息修改'); onClose(); return; }
       onNotify(result === 'replaced' ? '已覆盖原图并保留删除记录' : '已另存为一张新图片');
@@ -607,7 +611,7 @@ function EditModal({ meme, collections, onClose, onNotify, onUse }: { meme: Meme
         <label>备注<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={10000} placeholder="记录这张图最适合什么时候发…" /></label>
         {editable ? <details className="image-editor" open><summary><Crop size={15} /> 裁切与旋转 <small>输出 PNG · {output.width} × {output.height}</small></summary><div className="image-editor-controls"><p className="crop-instruction">直接拖动上方图片中的裁切框，不需要填写 X / Y 坐标。</p><div className="rotate-controls"><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw size={14} /> 向左 90°</button><button type="button" className="glass-button" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw size={14} /> 向右 90°</button><button type="button" className={`glass-button ${flip ? 'selected-mode' : ''}`} aria-pressed={flip} onClick={() => setFlip((value) => !value)}><FlipHorizontal size={14} /> 水平翻转</button></div><button type="button" className="text-button" onClick={resetCrop}>恢复整图</button></div></details> : <p className="image-edit-unsupported">GIF 动图、SVG 与 AVIF 为避免损坏原格式，暂不支持裁切和旋转；仍可编辑名称、标签和分组。</p>}
         <div className="edit-actions"><span /><button className="glass-button" disabled={editing} onClick={onUse}><Copy size={15} /> {isAndroid ? '分享' : '复制'}</button><button className="primary-button" disabled={editing} onClick={() => { void save(); }}><Check size={16} /> 保存信息</button></div>
-        {editable && <div className="image-save-actions"><button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={requestReplace}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
+        {editable && <div className="image-save-actions">{editing && <span className="image-save-progress"><i className="spinner" />正在生成并保存…</span>}<button className="glass-button" disabled={editing} onClick={() => { void saveEdited('copy'); }}>另存为</button><button className="primary-button" disabled={editing} onClick={requestReplace}>{editing ? '正在保存…' : '覆盖原图'}</button></div>}
         {editable && <p className="image-save-hint">“覆盖原图”会替换这张图片的原始像素，并与图库中的其他设备同步为删除旧图；覆盖前会再确认一次。</p>}
       </div>
     </div>

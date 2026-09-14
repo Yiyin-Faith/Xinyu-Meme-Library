@@ -297,7 +297,9 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 .text-button { justify-self: start; padding: 2px 0; color: #619273; background: transparent; font-size: 11px; }
 .text-button:hover { color: #467556; text-decoration: underline; }
 .image-edit-unsupported { padding: 9px 10px; border-radius: 10px; color: #937a66; background: rgba(255, 243, 224, .75); font-size: 11px; line-height: 1.5; }
-.image-save-actions { justify-content: flex-end; padding-top: 1px; }
+.image-save-actions { align-items: center; justify-content: flex-end; padding-top: 1px; }
+.image-save-progress { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; color: #6f8879; font-size: 10px; }
+.image-save-progress .spinner { width: 14px; height: 14px; flex: none; }
 .image-save-hint { margin: 0; color: #93a49a; font-size: 10px; line-height: 1.45; }
 .replace-confirm { display: grid; gap: 14px; }
 .replace-confirm p { margin: 0; color: #7c8d83; font-size: 12px; line-height: 1.6; }
@@ -378,8 +380,9 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 .crop-grid-h { left: 0; right: 0; height: 1px; }
 .crop-grid-v.one { left: 33.333%; } .crop-grid-v.two { left: 66.666%; }
 .crop-grid-h.one { top: 33.333%; } .crop-grid-h.two { top: 66.666%; }
-.crop-handle { position: absolute; width: 40px; height: 40px; touch-action: none; z-index: 3; }
-.crop-handle::after { content: ''; position: absolute; width: 11px; height: 11px; border-radius: 4px; background: #f8fff9; box-shadow: 0 1px 4px rgba(19,48,31,.34); }
+.crop-handle { position: absolute; width: 48px; height: 48px; touch-action: none; z-index: 4; }
+.crop-handle::after { content: ''; position: absolute; width: 15px; height: 15px; border: 2px solid rgba(57,103,72,.45); border-radius: 5px; background: #f8fff9; box-shadow: 0 2px 6px rgba(19,48,31,.36); }
+.crop-handle-nw, .crop-handle-ne, .crop-handle-se, .crop-handle-sw { z-index: 6; }
 .crop-handle-nw { left: 0; top: 0; cursor: nwse-resize; }.crop-handle-nw::after { left: 2px; top: 2px; }
 .crop-handle-n { left: 50%; top: 0; transform: translateX(-50%); cursor: ns-resize; }.crop-handle-n::after { left: 50%; top: 2px; transform: translateX(-50%); }
 .crop-handle-ne { right: 0; top: 0; cursor: nesw-resize; }.crop-handle-ne::after { right: 2px; top: 2px; }
@@ -390,10 +393,16 @@ h1 { color: #2d4137; font-size: clamp(25px, 3vw, 38px); line-height: 1.05; lette
 .crop-handle-w { left: 0; top: 50%; transform: translateY(-50%); cursor: ew-resize; }.crop-handle-w::after { left: 2px; top: 50%; transform: translateY(-50%); }
 .visual-crop-hint { color: #7d9185; text-align: center; font-size: 10px; }
 .crop-instruction { color: #728a7c; font-size: 11px; line-height: 1.55; }
+.visual-crop-focus-block { display: grid; gap: 7px; margin-top: 4px; padding-top: 9px; border-top: 1px solid rgba(82,126,96,.14); }
+.visual-crop-focus-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: #668071; }
+.visual-crop-focus-head strong { font-size: 11px; }
+.visual-crop-focus-head span { color: #91a399; font-size: 9px; text-align: right; }
+.visual-crop-focus { position: relative; width: 100%; max-height: 260px; margin: 0 auto; overflow: hidden; border: 1px solid rgba(99,145,111,.2); border-radius: 11px; background: #1f2823; }
+.visual-crop-focus > img { position: absolute; left: var(--focus-image-left); top: var(--focus-image-top); width: var(--focus-image-width); height: var(--focus-image-height); max-width: none; max-height: none; object-fit: fill; pointer-events: none; user-select: none; -webkit-user-drag: none; }
 @media (max-width: 720px) {
   .visual-cropper-shell { padding: 8px; }
-  .crop-handle { width: 44px; height: 44px; }
-  .crop-handle::after { width: 12px; height: 12px; }
+  .crop-handle { width: 56px; height: 56px; }
+  .crop-handle::after { width: 17px; height: 17px; }
 }
 
 /* Let the touch cropper use the wide editor instead of the legacy tiny square preview column. */

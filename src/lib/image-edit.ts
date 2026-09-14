@@ -92,11 +92,13 @@ export function adjustVisualCrop(
   dy: number,
   boundsWidth: number,
   boundsHeight: number,
-  minimumSize = 1,
+  minimumSize: number | { width: number; height: number } = 1,
 ): CropRect {
   const safe = clampCrop(crop, boundsWidth, boundsHeight);
-  const minWidth = Math.max(1, Math.min(boundsWidth, minimumSize));
-  const minHeight = Math.max(1, Math.min(boundsHeight, minimumSize));
+  const requestedMinWidth = typeof minimumSize === 'number' ? minimumSize : minimumSize.width;
+  const requestedMinHeight = typeof minimumSize === 'number' ? minimumSize : minimumSize.height;
+  const minWidth = Math.max(1, Math.min(boundsWidth, requestedMinWidth));
+  const minHeight = Math.max(1, Math.min(boundsHeight, requestedMinHeight));
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   if (action === 'move') {
     return {

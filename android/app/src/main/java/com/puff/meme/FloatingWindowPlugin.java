@@ -1,5 +1,7 @@
 package com.puff.meme;
 
+import android.app.Activity;
+import android.content.ClipData;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Handler;
@@ -7,6 +9,7 @@ import android.os.Looper;
 import android.provider.Settings;
 
 import androidx.activity.result.ActivityResult;
+import androidx.core.content.FileProvider;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.JSArray;
@@ -16,6 +19,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.File;
 import java.util.List;
 
 @CapacitorPlugin(name = "FloatingWindow")
@@ -91,6 +95,52 @@ public class FloatingWindowPlugin extends Plugin {
         double requested = call.getDouble("opacity", 0.82d);
         FloatingWindowService.setOpacity(getContext(), (float) requested);
         call.resolve(status());
+    }
+
+
+    /**
+     * Shares one app-private prepared image through a fresh Android chooser.
+     * This path is intentionally stateless so closing one chooser cannot leave
+     * the floating mini library unable to share the next image.
+     */
+    @PluginMethod
+    public void sharePreparedFile(PluginCall call) {
+        String relativePath = call.getString("path", "").trim();
+        String mime = call.getString("mime", "image/*").trim();
+        String title = call.getString("title", "").trim();
+        String dialogTitle = call.getString("dialogTitle", "发送这个表情");
+        try {
+            File filesRoot = getContext().getFilesDir().getCanonicalFile();
+            File shareRoot = new File(filesRoot, "xinyu-share").getCanonicalFile();
+            File target = new File(filesRoot, relativePath).getCanonicalFile();
+            String sharePrefix = shareRoot.getPath() + File.separator;
+            if (!target.getPath().startsWith(sharePrefix) || !target.isFile()) {
+                call.reject("分享文件不存在或路径无效");
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(
+                getContext(),
+                getContext().getPackageName() + ".fileprovider",
+                target
+            );
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType(mime.isEmpty() ? "image/*" : mime);
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            if (!title.isEmpty()) send.putExtra(Intent.EXTRA_TITLE, title);
+            send.setClipData(ClipData.newRawUri("xinyu-meme", uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(send, dialogTitle);
+            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Activity activity = getActivity();
+            if (activity != null && !activity.isFinishing()) activity.startActivity(chooser);
+            else {
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(chooser);
+            }
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("无法打开系统分享：" + (error.getMessage() == null ? "未知错误" : error.getMessage()), error);
+        }
     }
 
     /**
