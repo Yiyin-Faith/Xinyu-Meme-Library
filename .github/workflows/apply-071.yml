@@ -30,6 +30,16 @@ jobs:
       - name: Switch to candidate and apply patch
         run: |
           cp .github/apply-071.py /tmp/apply-071.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/apply-071.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              "it('moves and resizes the visual crop without leaving the image bounds', () => {",
+              "it('moves and resizes visual crops without leaving the preview bounds', () => {",
+          )
+          p.write_text(text, encoding='utf-8')
+          PY
           git fetch origin fix/share-crop-polish-071
           git switch -C fix/share-crop-polish-071 origin/fix/share-crop-polish-071
           python /tmp/apply-071.py
